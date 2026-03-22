@@ -13,12 +13,10 @@
 		updateConfig,
 		verifyConfigUrl
 	} from '$lib/apis/images';
-	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import SensitiveInput from '$lib/components/common/SensitiveInput.svelte';
 	import Switch from '$lib/components/common/Switch.svelte';
 	import Tooltip from '$lib/components/common/Tooltip.svelte';
 	import HaloSelect from '$lib/components/common/HaloSelect.svelte';
-	import ModelSelect from '$lib/components/common/ModelSelect.svelte';
 	import InlineDirtyActions from './InlineDirtyActions.svelte';
 	import { cloneSettingsSnapshot, isSettingsSnapshotEqual } from '$lib/utils/settings-dirty';
 	const dispatch = createEventDispatcher();
@@ -32,6 +30,10 @@
 	let imageGenerationConfig = null;
 
 	let models = null;
+	$: imageModelOptions = (models ?? []).map((model) => ({
+		value: `${model?.id ?? ''}`,
+		label: `${model?.name || model?.id || ''}`
+	}));
 
 	let samplers = [
 		'DPM++ 2M',
@@ -134,6 +136,40 @@
 		}
 	};
 
+	const clearUnavailableDefaultModel = (nextModels, { silent = false }: { silent?: boolean } = {}) => {
+		if (!imageGenerationConfig) {
+			return;
+		}
+
+		const currentModel = `${imageGenerationConfig.MODEL ?? ''}`.trim();
+		if (!currentModel) {
+			return;
+		}
+
+		const availableModelIds = new Set(
+			(Array.isArray(nextModels) ? nextModels : [])
+				.map((model) => `${model?.id ?? ''}`.trim())
+				.filter(Boolean)
+		);
+
+		if (availableModelIds.has(currentModel)) {
+			return;
+		}
+
+		imageGenerationConfig = {
+			...imageGenerationConfig,
+			MODEL: ''
+		};
+
+		if (!silent) {
+			toast.info(
+				$i18n.t(
+					'The saved default model is not available for the current image engine and has been cleared.'
+				)
+			);
+		}
+	};
+
 	const getErrorText = (error) => {
 		if (typeof error === 'string') {
 			return error;
@@ -188,7 +224,7 @@
 		afterSave = false,
 		silent = false
 	}: { afterSave?: boolean; silent?: boolean } = {}) => {
-		models = await getImageGenerationModels(localStorage.token).catch((error) => {
+		const nextModels = await getImageGenerationModels(localStorage.token).catch((error) => {
 			if (!silent) {
 				const message = afterSave
 					? $i18n.t(
@@ -205,6 +241,14 @@
 
 			return null;
 		});
+
+		models = Array.isArray(nextModels) ? nextModels : null;
+
+		if (Array.isArray(nextModels)) {
+			clearUnavailableDefaultModel(nextModels, { silent });
+		}
+
+		return nextModels;
 	};
 
 	const updateConfigHandler = async ({ refreshModels = true }: { refreshModels?: boolean } = {}) => {
@@ -240,17 +284,198 @@
 		try {
 			const obj = JSON.parse(json);
 
-			if (obj && typeof obj === 'object') {
+			if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
 				return true;
 			}
 		} catch (e) {}
 		return false;
 	};
 
-	const getMissingComfyUIWorkflowMappings = (workflowJson, workflowNodes) => {
+	const parseComfyUIWorkflow = (workflowJson) => {
 		try {
 			const workflow = JSON.parse(workflowJson);
-			if (!workflow || typeof workflow !== 'object') {
+			if (workflow && typeof workflow === 'object' && !Array.isArray(workflow)) {
+				return workflow;
+			}
+		} catch (error) {}
+		return null;
+	};
+
+	const inferComfyUIWorkflowNodes = (workflowJson) => {
+		const workflow = parseComfyUIWorkflow(workflowJson);
+		if (!workflow) {
+			return null;
+		}
+
+		const nodes = Object.entries(workflow).map(([id, node]) => ({
+			id: `${id}`,
+			classType: `${node?.class_type ?? ''}`,
+			title: `${node?._meta?.title ?? ''}`,
+			inputs: node?.inputs && typeof node.inputs === 'object' ? node.inputs : {}
+		}));
+
+		const hasInput = (node, key) => Object.prototype.hasOwnProperty.call(node.inputs ?? {}, key);
+
+		const pickPromptNode = () => {
+			return (
+				nodes.find((node) => /^CLIPTextEncodeLumina2$/i.test(node.classType) && hasInput(node, 'user_prompt')) ??
+				nodes.find((node) => /^CLIPTextEncode/i.test(node.classType) && hasInput(node, 'text')) ??
+				nodes.find((node) => /^CLIPTextEncode/i.test(node.classType) && hasInput(node, 'user_prompt')) ??
+				nodes.find((node) => /^CLIPTextEncode/i.test(node.classType) && hasInput(node, 'text_g')) ??
+				nodes.find((node) =>
+					['user_prompt', 'text', 'prompt', 'text_g'].some((key) => hasInput(node, key))
+				)
+			);
+		};
+
+		const pickModelNode = () => {
+			return (
+				nodes.find((node) => /^UNETLoader$/i.test(node.classType) && hasInput(node, 'unet_name')) ??
+				nodes.find((node) => /CheckpointLoader/i.test(node.classType) && hasInput(node, 'ckpt_name')) ??
+				nodes.find((node) => hasInput(node, 'unet_name')) ??
+				nodes.find((node) => hasInput(node, 'ckpt_name')) ??
+				nodes.find((node) => hasInput(node, 'model_name')) ??
+				nodes.find((node) => hasInput(node, 'dit_name'))
+			);
+		};
+
+		const pickSizeNode = () => {
+			return (
+				nodes.find(
+					(node) =>
+						hasInput(node, 'width') &&
+						hasInput(node, 'height') &&
+						/Empty.*Latent|EmptyImage|Latent/i.test(node.classType)
+				) ??
+				nodes.find(
+					(node) =>
+						hasInput(node, 'width') &&
+						hasInput(node, 'height') &&
+						!/^CLIPTextEncode/i.test(node.classType)
+				) ??
+				nodes.find((node) => hasInput(node, 'width') && hasInput(node, 'height'))
+			);
+		};
+
+		const pickSamplerNode = () => {
+			return (
+				nodes.find(
+					(node) =>
+						hasInput(node, 'steps') &&
+						(hasInput(node, 'seed') || hasInput(node, 'noise_seed')) &&
+						/KSampler|Sampler/i.test(node.classType)
+				) ??
+				nodes.find(
+					(node) => hasInput(node, 'steps') && (hasInput(node, 'seed') || hasInput(node, 'noise_seed'))
+				)
+			);
+		};
+
+		const promptNode = pickPromptNode();
+		const modelNode = pickModelNode();
+		const sizeNode = pickSizeNode();
+		const samplerNode = pickSamplerNode();
+
+		const inferredByType = {
+			prompt: promptNode
+				? {
+						key: hasInput(promptNode, 'user_prompt')
+							? 'user_prompt'
+							: hasInput(promptNode, 'text')
+								? 'text'
+								: hasInput(promptNode, 'prompt')
+									? 'prompt'
+									: hasInput(promptNode, 'text_g')
+										? 'text_g'
+										: 'text',
+						node_ids: promptNode.id
+					}
+				: { key: 'text', node_ids: '' },
+			model: modelNode
+				? {
+						key: hasInput(modelNode, 'unet_name')
+							? 'unet_name'
+							: hasInput(modelNode, 'ckpt_name')
+								? 'ckpt_name'
+								: hasInput(modelNode, 'model_name')
+									? 'model_name'
+									: hasInput(modelNode, 'dit_name')
+										? 'dit_name'
+										: 'unet_name',
+						node_ids: modelNode.id
+					}
+				: { key: 'unet_name', node_ids: '' },
+			width: sizeNode ? { key: 'width', node_ids: sizeNode.id } : { key: 'width', node_ids: '' },
+			height: sizeNode ? { key: 'height', node_ids: sizeNode.id } : { key: 'height', node_ids: '' },
+			steps: samplerNode ? { key: 'steps', node_ids: samplerNode.id } : { key: 'steps', node_ids: '' },
+			seed: samplerNode
+				? { key: hasInput(samplerNode, 'seed') ? 'seed' : 'noise_seed', node_ids: samplerNode.id }
+				: { key: 'seed', node_ids: '' }
+		};
+
+		return requiredWorkflowNodes.map((node) => ({
+			type: node.type,
+			key: inferredByType[node.type]?.key ?? node.key,
+			node_ids: inferredByType[node.type]?.node_ids ?? ''
+		}));
+	};
+
+	const applyAutoDetectedComfyUIWorkflowNodes = (
+		workflowJson,
+		{ silent = false }: { silent?: boolean } = {}
+	) => {
+		const inferredNodes = inferComfyUIWorkflowNodes(workflowJson);
+		if (!inferredNodes) {
+			return false;
+		}
+
+		requiredWorkflowNodes = inferredNodes;
+
+		if (!silent) {
+			const resolvedCount = inferredNodes.filter((node) => `${node.node_ids ?? ''}`.trim() !== '').length;
+			const unresolved = inferredNodes
+				.filter((node) => `${node.node_ids ?? ''}`.trim() === '')
+				.map((node) => node.type);
+
+			if (resolvedCount > 0) {
+				toast.success(
+					unresolved.length === 0
+						? $i18n.t('Auto-detected ComfyUI workflow node mapping.')
+						: $i18n.t(
+								'Auto-detected {{count}} ComfyUI workflow mappings. Remaining fields may need manual adjustment: {{types}}.',
+								{ count: resolvedCount, types: unresolved.join(', ') }
+							)
+				);
+			}
+		}
+
+		return true;
+	};
+
+	const handleComfyUIWorkflowUpload = (event: Event) => {
+		const input = event.currentTarget as HTMLInputElement | null;
+		const file = input?.files?.[0];
+		if (!file) {
+			return;
+		}
+
+		const reader = new FileReader();
+		reader.onload = (loadEvent) => {
+			config.comfyui.COMFYUI_WORKFLOW = `${loadEvent.target?.result ?? ''}`;
+			if (validateJSON(config.comfyui.COMFYUI_WORKFLOW)) {
+				applyAutoDetectedComfyUIWorkflowNodes(config.comfyui.COMFYUI_WORKFLOW);
+			}
+			if (input) {
+				input.value = '';
+			}
+		};
+		reader.readAsText(file);
+	};
+
+	const getMissingComfyUIWorkflowMappings = (workflowJson, workflowNodes) => {
+		try {
+			const workflow = parseComfyUIWorkflow(workflowJson);
+			if (!workflow) {
 				return [];
 			}
 
@@ -281,6 +506,10 @@
 					loading = false;
 					return;
 				}
+
+				applyAutoDetectedComfyUIWorkflowNodes(config.comfyui.COMFYUI_WORKFLOW, {
+					silent: true
+				});
 			}
 
 		if (config?.comfyui?.COMFYUI_WORKFLOW) {
@@ -336,15 +565,15 @@
 		imageGenerationConfig = updatedImageGenerationConfig;
 
 		backendConfig.set(await getBackendConfig());
-		await tick();
-		syncBaseline();
-		dispatch('save');
-
 		if (config.enabled) {
-			void getModels({ afterSave: true });
+			await getModels({ afterSave: true });
 		} else {
 			models = null;
 		}
+
+		await tick();
+		syncBaseline();
+		dispatch('save');
 
 		loading = false;
 	};
@@ -376,17 +605,13 @@
 				})
 			]);
 
-			if (res) {
-				config = normalizeLoadedConfig(res);
-			}
+				if (res) {
+					config = normalizeLoadedConfig(res);
+				}
 
-			if (config.enabled) {
-				getModels();
-			}
-
-			if (config.comfyui.COMFYUI_WORKFLOW) {
-				try {
-					config.comfyui.COMFYUI_WORKFLOW = JSON.stringify(
+				if (config.comfyui.COMFYUI_WORKFLOW) {
+					try {
+						config.comfyui.COMFYUI_WORKFLOW = JSON.stringify(
 						JSON.parse(config.comfyui.COMFYUI_WORKFLOW),
 						null,
 						2
@@ -396,24 +621,40 @@
 				}
 			}
 
-			requiredWorkflowNodes = requiredWorkflowNodes.map((node) => {
-				const n = config.comfyui.COMFYUI_WORKFLOW_NODES.find((n) => n.type === node.type) ?? node;
+				const storedWorkflowNodes = config.comfyui.COMFYUI_WORKFLOW_NODES ?? [];
+				const storedMappingsMissing =
+					config?.comfyui?.COMFYUI_WORKFLOW &&
+					getMissingComfyUIWorkflowMappings(
+						config.comfyui.COMFYUI_WORKFLOW,
+						storedWorkflowNodes
+					).length > 0;
 
-				console.log(n);
+				if (storedMappingsMissing) {
+					applyAutoDetectedComfyUIWorkflowNodes(config.comfyui.COMFYUI_WORKFLOW, {
+						silent: true
+					});
+				} else {
+					requiredWorkflowNodes = requiredWorkflowNodes.map((node) => {
+						const n = storedWorkflowNodes.find((n) => n.type === node.type) ?? node;
 
-				return {
-					type: n.type,
-					key: n.key,
-					node_ids: typeof n.node_ids === 'string' ? n.node_ids : n.node_ids.join(',')
-				};
-			});
+						return {
+							type: n.type,
+							key: n.key,
+							node_ids: typeof n.node_ids === 'string' ? n.node_ids : n.node_ids.join(',')
+						};
+					});
+				}
 
-			if (imageConfigRes) {
-				imageGenerationConfig = imageConfigRes;
-			}
+				if (imageConfigRes) {
+					imageGenerationConfig = imageConfigRes;
+				}
 
-			await tick();
-			syncBaseline();
+				if (config.enabled) {
+					await getModels({ silent: true });
+				}
+
+				await tick();
+				syncBaseline();
 		}
 	});
 
@@ -553,6 +794,12 @@
 										on:change={async () => {
 											if (!['openai', 'gemini'].includes(config.engine)) {
 												config.shared_key_enabled = false;
+											}
+											if (imageGenerationConfig?.MODEL) {
+												imageGenerationConfig = {
+													...imageGenerationConfig,
+													MODEL: ''
+												};
 											}
 											syncDraftModels();
 										}}
@@ -860,30 +1107,30 @@
 									{$i18n.t('ComfyUI Workflow')}
 								</div>
 
-								{#if config.comfyui.COMFYUI_WORKFLOW}
-									<textarea
-										class="w-full mb-2 py-2 px-3 text-xs dark:text-gray-300 glass-input disabled:text-gray-600 resize-none"
-										rows="10"
-										bind:value={config.comfyui.COMFYUI_WORKFLOW}
-										required
-									/>
-								{/if}
+									{#if config.comfyui.COMFYUI_WORKFLOW}
+										<textarea
+											class="w-full mb-2 py-2 px-3 text-xs dark:text-gray-300 glass-input disabled:text-gray-600 resize-none"
+											rows="10"
+											bind:value={config.comfyui.COMFYUI_WORKFLOW}
+											on:blur={() => {
+												if (config?.comfyui?.COMFYUI_WORKFLOW && validateJSON(config.comfyui.COMFYUI_WORKFLOW)) {
+													applyAutoDetectedComfyUIWorkflowNodes(
+														config.comfyui.COMFYUI_WORKFLOW,
+														{ silent: true }
+													);
+												}
+											}}
+											required
+										/>
+									{/if}
 
-								<input
-									id="upload-comfyui-workflow-input"
-									hidden
-									type="file"
-									accept=".json"
-									on:change={(e) => {
-										const file = e.target.files[0];
-										const reader = new FileReader();
-										reader.onload = (e) => {
-											config.comfyui.COMFYUI_WORKFLOW = e.target.result;
-											e.target.value = null;
-										};
-										reader.readAsText(file);
-									}}
-								/>
+									<input
+										id="upload-comfyui-workflow-input"
+										hidden
+										type="file"
+										accept=".json"
+										on:change={handleComfyUIWorkflowUpload}
+									/>
 								<button
 									class="w-full text-sm font-medium py-2.5 glass-item border-dashed text-gray-600 dark:text-gray-400 text-center transition"
 									type="button"
@@ -1051,13 +1298,15 @@
 									<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">
 										{$i18n.t('Set Default Model')}
 									</div>
-									<ModelSelect
-										bind:value={imageGenerationConfig.MODEL}
-										models={models ?? []}
-										placeholder="Select a model"
-										searchEnabled={true}
-										side="right"
-									/>
+										<HaloSelect
+											bind:value={imageGenerationConfig.MODEL}
+											options={imageModelOptions}
+											placeholder={$i18n.t('Select a model')}
+											searchEnabled={true}
+											searchPlaceholder={$i18n.t('Search a model')}
+											noResultsText={$i18n.t('No results found')}
+											className="w-full"
+										/>
 								</div>
 								<div
 									class="glass-item p-4"

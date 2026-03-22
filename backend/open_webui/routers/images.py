@@ -101,6 +101,124 @@ def _validate_comfyui_workflow_node_mapping(
         )
 
 
+def _normalize_comfyui_model_option(option) -> Optional[dict]:
+    if option is None:
+        return None
+
+    if isinstance(option, (str, int, float)):
+        value = str(option).strip()
+        if not value:
+            return None
+        return {"id": value, "name": value}
+
+    if isinstance(option, dict):
+        raw_value = (
+            option.get("key")
+            or option.get("value")
+            or option.get("id")
+            or option.get("name")
+            or option.get("label")
+        )
+        value = str(raw_value or "").strip()
+        if not value:
+            return None
+        label = str(option.get("label") or option.get("name") or value).strip() or value
+        return {"id": value, "name": label}
+
+    return None
+
+
+def _extract_comfyui_input_options(input_spec) -> list[dict]:
+    if not isinstance(input_spec, list) or not input_spec:
+        return []
+
+    options = None
+    if isinstance(input_spec[0], list):
+        options = input_spec[0]
+    elif len(input_spec) > 1 and isinstance(input_spec[1], dict):
+        options = input_spec[1].get("options")
+
+    if not isinstance(options, list):
+        return []
+
+    extracted = []
+    seen = set()
+    for option in options:
+        normalized = _normalize_comfyui_model_option(option)
+        if not normalized:
+            continue
+        option_id = normalized["id"]
+        if option_id in seen:
+            continue
+        seen.add(option_id)
+        extracted.append(normalized)
+
+    return extracted
+
+
+def _get_comfyui_models(info: dict, workflow: dict, workflow_nodes: list[dict]) -> list[dict]:
+    model_node = next(
+        (
+            node
+            for node in (workflow_nodes or [])
+            if str(node.get("type") or "") == "model" and node.get("node_ids")
+        ),
+        None,
+    )
+
+    if not model_node:
+        return _extract_comfyui_input_options(
+            (
+                info.get("CheckpointLoaderSimple", {})
+                .get("input", {})
+                .get("required", {})
+                .get("ckpt_name")
+            )
+        )
+
+    model_node_id = str((model_node.get("node_ids") or [""])[0]).strip()
+    workflow_node = workflow.get(model_node_id, {}) if model_node_id else {}
+    class_type = str(workflow_node.get("class_type") or "").strip()
+    node_key = str(model_node.get("key") or "").strip()
+
+    if not class_type:
+        return []
+
+    node_info = info.get(class_type, {})
+    node_inputs = node_info.get("input", {}) if isinstance(node_info, dict) else {}
+
+    candidate_specs = []
+
+    for section_name in ("required", "optional"):
+        section = node_inputs.get(section_name, {})
+        if not isinstance(section, dict):
+            continue
+        if node_key and node_key in section:
+            candidate_specs.append(section[node_key])
+
+    if not candidate_specs:
+        for section_name in ("required", "optional"):
+            section = node_inputs.get(section_name, {})
+            if not isinstance(section, dict):
+                continue
+            for key, spec in section.items():
+                key_str = str(key or "").strip()
+                if key_str == "model" or key_str.endswith("_name"):
+                    candidate_specs.append(spec)
+
+    models = []
+    seen = set()
+    for spec in candidate_specs:
+        for option in _extract_comfyui_input_options(spec):
+            option_id = option["id"]
+            if option_id in seen:
+                continue
+            seen.add(option_id)
+            models.append(option)
+
+    return models
+
+
 def _get_user_provider_urls_keys(user, provider: str) -> tuple[list[str], list[str]]:
     conns = get_user_connections(user)
     cfg = conns.get(provider) if isinstance(conns, dict) else None
@@ -557,13 +675,16 @@ def get_models(request: Request, user=Depends(get_verified_user)):
                 {"id": "imagen-3-0-generate-002", "name": "imagen-3.0 generate-002"},
             ]
         elif request.app.state.config.IMAGE_GENERATION_ENGINE == "comfyui":
-            headers = {
-                "Authorization": f"Bearer {request.app.state.config.COMFYUI_API_KEY}"
-            }
+            headers = None
+            if request.app.state.config.COMFYUI_API_KEY:
+                headers = {
+                    "Authorization": f"Bearer {request.app.state.config.COMFYUI_API_KEY}"
+                }
             r = requests.get(
                 url=f"{request.app.state.config.COMFYUI_BASE_URL}/object_info",
                 headers=headers,
             )
+            r.raise_for_status()
             info = r.json()
 
             workflow = _parse_comfyui_workflow_config(request)
@@ -572,43 +693,9 @@ def get_models(request: Request, user=Depends(get_verified_user)):
                 request.app.state.config.COMFYUI_WORKFLOW_NODES,
                 node_type="model",
             )
-            model_node_id = None
-
-            for node in request.app.state.config.COMFYUI_WORKFLOW_NODES:
-                if node["type"] == "model":
-                    if node["node_ids"]:
-                        model_node_id = node["node_ids"][0]
-                    break
-
-            if model_node_id:
-                model_list_key = None
-
-                log.info(workflow[model_node_id]["class_type"])
-                for key in info[workflow[model_node_id]["class_type"]]["input"][
-                    "required"
-                ]:
-                    if "_name" in key:
-                        model_list_key = key
-                        break
-
-                if model_list_key:
-                    models = list(
-                        map(
-                            lambda model: {"id": model, "name": model},
-                            info[workflow[model_node_id]["class_type"]]["input"][
-                                "required"
-                            ][model_list_key][0],
-                        )
-                    )
-            else:
-                models = list(
-                    map(
-                        lambda model: {"id": model, "name": model},
-                        info["CheckpointLoaderSimple"]["input"]["required"][
-                            "ckpt_name"
-                        ][0],
-                    )
-                )
+            models = _get_comfyui_models(
+                info, workflow, request.app.state.config.COMFYUI_WORKFLOW_NODES
+            )
         elif (
             request.app.state.config.IMAGE_GENERATION_ENGINE == "automatic1111"
             or request.app.state.config.IMAGE_GENERATION_ENGINE == ""
@@ -666,7 +753,44 @@ def load_b64_image_data(b64_str):
         return None
 
 
-def load_url_image_data(url, headers=None):
+def _normalize_url_origin(url: Optional[str]) -> Optional[tuple[str, str, Optional[int]]]:
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(str(url or "").strip())
+        scheme = str(parsed.scheme or "").lower()
+        hostname = str(parsed.hostname or "").lower()
+        if not scheme or not hostname:
+            return None
+
+        port = parsed.port
+        if port is None:
+            if scheme == "http":
+                port = 80
+            elif scheme == "https":
+                port = 443
+
+        return scheme, hostname, port
+    except Exception:
+        return None
+
+
+def _is_allowed_internal_url(
+    url: str, allowed_base_urls: Optional[list[str]] = None
+) -> bool:
+    target_origin = _normalize_url_origin(url)
+    if not target_origin:
+        return False
+
+    for base_url in allowed_base_urls or []:
+        base_origin = _normalize_url_origin(base_url)
+        if base_origin and base_origin == target_origin:
+            return True
+
+    return False
+
+
+def load_url_image_data(url, headers=None, allowed_base_urls: Optional[list[str]] = None):
     try:
         # Basic SSRF protection: reject private/internal URLs
         from urllib.parse import urlparse
@@ -674,12 +798,22 @@ def load_url_image_data(url, headers=None):
 
         parsed = urlparse(url)
         hostname = parsed.hostname or ""
-        if hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0") or hostname.endswith(".local"):
+        allow_internal = _is_allowed_internal_url(url, allowed_base_urls)
+
+        if (
+            not allow_internal
+            and (
+                hostname in ("localhost", "127.0.0.1", "::1", "0.0.0.0")
+                or hostname.endswith(".local")
+            )
+        ):
             log.warning(f"Blocked SSRF attempt to internal URL: {hostname}")
             return None
         try:
             ip = ipaddress.ip_address(hostname)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved:
+            if not allow_internal and (
+                ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_reserved
+            ):
                 log.warning(f"Blocked SSRF attempt to private IP: {ip}")
                 return None
         except ValueError:
@@ -882,9 +1016,21 @@ async def image_generations(
 
             for image in res["data"]:
                 if image_url := image.get("url", None):
-                    image_data, content_type = load_url_image_data(image_url, headers)
+                    loaded_image = load_url_image_data(image_url, headers)
+                    if not loaded_image:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Failed to load generated image from the image generation service.",
+                        )
+                    image_data, content_type = loaded_image
                 else:
-                    image_data, content_type = load_b64_image_data(image["b64_json"])
+                    loaded_image = load_b64_image_data(image["b64_json"])
+                    if not loaded_image:
+                        raise HTTPException(
+                            status_code=400,
+                            detail="Failed to decode generated image data.",
+                        )
+                    image_data, content_type = loaded_image
 
                 url = upload_image(request, data, image_data, content_type, user)
                 images.append({"url": url})
@@ -1058,7 +1204,17 @@ async def image_generations(
                         "Authorization": f"Bearer {request.app.state.config.COMFYUI_API_KEY}"
                     }
 
-                image_data, content_type = load_url_image_data(image["url"], headers)
+                loaded_image = load_url_image_data(
+                    image["url"],
+                    headers,
+                    allowed_base_urls=[request.app.state.config.COMFYUI_BASE_URL],
+                )
+                if not loaded_image:
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Failed to load generated image from ComfyUI output URL.",
+                    )
+                image_data, content_type = loaded_image
                 url = upload_image(
                     request,
                     form_data.model_dump(exclude_none=True),

@@ -828,8 +828,10 @@
 	"General": "通用设置",
 	"Generate an image": "生成图像",
 	"Generate Image": "生成图像",
+	"Generated an image": "已生成图片",
 	"Generate prompt pair": "生成提示对",
 	"Generate title with AI": "AI 生成标题",
+	"Generating an image": "正在生成图片",
 	"Generating search query": "生成搜索查询",
 	"Get from": "获取方式：",
 	"Get started": "开始使用",
@@ -1824,6 +1826,7 @@
 	"Warning: Enabling this will allow users to upload arbitrary code on the server.": "警告：启用此功能将允许用户在服务器上上传任意代码。",
 	"Warning: If you update or change your embedding model, you will need to re-import all documents.": "警告：如果您更新或更换语义向量模型，则需要重新导入所有文档。",
 	"Warning: Jupyter execution enables arbitrary code execution, posing severe security risks—proceed with extreme caution.": "警告：Jupyter 执行允许任意代码执行，存在严重的安全风险——请极其谨慎地操作。",
+	"An error occurred while generating an image": "生成图片时发生错误",
 	"Web": "网页",
 	"Web API": "网页 API",
 	"Web Loader": "网页加载器",
@@ -2196,5 +2199,8 @@
 	"To select toolkits here, add them to the \"Tools\" workspace first.": "要在这里选择工具集，请先将其添加到“工具”工作空间。",
 	"Add suggestion": "添加建议",
 	"Usage": "用量",
-	"Enter the model's default system prompt here\ne.g.) You are a professional AI assistant. Provide clear, accurate, and concise responses based on the user's needs.": "在此处填入模型默认预设的系统提示词\n例如：你是一名专业的 AI 助手，请根据用户需求提供清晰、准确、简洁的回答。"
+	"Enter the model's default system prompt here\ne.g.) You are a professional AI assistant. Provide clear, accurate, and concise responses based on the user's needs.": "在此处填入模型默认预设的系统提示词\n例如：你是一名专业的 AI 助手，请根据用户需求提供清晰、准确、简洁的回答。",
+	"Auto-detected ComfyUI workflow node mapping.": "已自动识别 ComfyUI 工作流节点映射。",
+	"Auto-detected {{count}} ComfyUI workflow mappings. Remaining fields may need manual adjustment: {{types}}.": "已自动识别 {{count}} 个 ComfyUI 工作流映射。其余字段可能仍需手动调整：{{types}}。",
+	"The saved default model is not available for the current image engine and has been cleared.": "已保存的默认模型不适用于当前图片引擎，已自动清除。"
 }

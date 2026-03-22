@@ -1558,5 +1558,8 @@
 	"To select toolkits here, add them to the \"Tools\" workspace first.": "To select toolkits here, add them to the \"Tools\" workspace first.",
 	"Add suggestion": "Add suggestion",
 	"Usage": "Usage",
-	"Enter the model's default system prompt here\ne.g.) You are a professional AI assistant. Provide clear, accurate, and concise responses based on the user's needs.": "Enter the model's default system prompt here\ne.g.) You are a professional AI assistant. Provide clear, accurate, and concise responses based on the user's needs."
+	"Enter the model's default system prompt here\ne.g.) You are a professional AI assistant. Provide clear, accurate, and concise responses based on the user's needs.": "Enter the model's default system prompt here\ne.g.) You are a professional AI assistant. Provide clear, accurate, and concise responses based on the user's needs.",
+	"Auto-detected ComfyUI workflow node mapping.": "",
+	"Auto-detected {{count}} ComfyUI workflow mappings. Remaining fields may need manual adjustment: {{types}}.": "",
+	"The saved default model is not available for the current image engine and has been cleared.": ""
 }
