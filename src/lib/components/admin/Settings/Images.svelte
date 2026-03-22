@@ -247,6 +247,31 @@
 		return false;
 	};
 
+	const getMissingComfyUIWorkflowMappings = (workflowJson, workflowNodes) => {
+		try {
+			const workflow = JSON.parse(workflowJson);
+			if (!workflow || typeof workflow !== 'object') {
+				return [];
+			}
+
+			const workflowNodeIds = new Set(Object.keys(workflow));
+			const missingMappings = [];
+
+			for (const node of workflowNodes ?? []) {
+				for (const rawNodeId of node?.node_ids ?? []) {
+					const nodeId = `${rawNodeId ?? ''}`.trim();
+					if (nodeId !== '' && !workflowNodeIds.has(nodeId)) {
+						missingMappings.push(`${node.type}(${nodeId})`);
+					}
+				}
+			}
+
+			return missingMappings;
+		} catch (error) {
+			return [];
+		}
+	};
+
 	const saveHandler = async () => {
 		loading = true;
 
@@ -259,7 +284,7 @@
 			}
 
 		if (config?.comfyui?.COMFYUI_WORKFLOW) {
-			config.comfyui.COMFYUI_WORKFLOW_NODES = requiredWorkflowNodes.map((node) => {
+			const nextWorkflowNodes = requiredWorkflowNodes.map((node) => {
 				return {
 					type: node.type,
 					key: node.key,
@@ -267,6 +292,24 @@
 						node.node_ids.trim() === '' ? [] : node.node_ids.split(',').map((id) => id.trim())
 				};
 			});
+
+			const missingMappings = getMissingComfyUIWorkflowMappings(
+				config.comfyui.COMFYUI_WORKFLOW,
+				nextWorkflowNodes
+			);
+
+			if (missingMappings.length > 0) {
+				toast.error(
+					$i18n.t(
+						'Configured ComfyUI workflow node IDs do not exist in the current workflow: {{mappings}}. Please update the workflow node mapping and try again.',
+						{ mappings: missingMappings.join(', ') }
+					)
+				);
+				loading = false;
+				return;
+			}
+
+			config.comfyui.COMFYUI_WORKFLOW_NODES = nextWorkflowNodes;
 		}
 
 		const updatedConfig = await updateConfig(localStorage.token, config).catch((error) => {

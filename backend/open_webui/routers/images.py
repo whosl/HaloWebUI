@@ -33,6 +33,10 @@ IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 router = APIRouter()
 
+COMFYUI_WORKFLOW_NODE_MAPPING_INVALID = (
+    "ComfyUI workflow node mapping is invalid. Please update the workflow node IDs to match the current workflow."
+)
+
 def _can_use_image_generation(request: Request, user) -> bool:
     """Server-side permission gate for image generation (matches builtin_tools behavior)."""
     if getattr(user, "role", None) == "admin":
@@ -53,6 +57,48 @@ def _normalize_engine(value: Optional[str]) -> str:
 
 def _is_non_empty(value: Optional[str]) -> bool:
     return isinstance(value, str) and value.strip() != ""
+
+
+def _parse_comfyui_workflow_config(request: Request) -> dict:
+    workflow = json.loads(request.app.state.config.COMFYUI_WORKFLOW or "{}")
+    if not isinstance(workflow, dict):
+        raise HTTPException(
+            status_code=400, detail=COMFYUI_WORKFLOW_NODE_MAPPING_INVALID
+        )
+    return workflow
+
+
+def _collect_missing_comfyui_node_refs(
+    workflow: dict, workflow_nodes: list[dict], *, node_type: Optional[str] = None
+) -> list[tuple[str, str]]:
+    workflow_node_ids = {str(node_id) for node_id in workflow.keys()}
+    missing_refs: list[tuple[str, str]] = []
+
+    for node in workflow_nodes or []:
+        current_type = str(node.get("type") or "")
+        if node_type is not None and current_type != node_type:
+            continue
+
+        for raw_node_id in node.get("node_ids") or []:
+            node_id = str(raw_node_id).strip()
+            if node_id and node_id not in workflow_node_ids:
+                missing_refs.append((current_type or "custom", node_id))
+
+    return missing_refs
+
+
+def _validate_comfyui_workflow_node_mapping(
+    workflow: dict, workflow_nodes: list[dict], *, node_type: Optional[str] = None
+) -> None:
+    missing_refs = _collect_missing_comfyui_node_refs(
+        workflow, workflow_nodes, node_type=node_type
+    )
+    if missing_refs:
+        refs = ", ".join(f"{kind}({node_id})" for kind, node_id in missing_refs)
+        log.warning(f"Invalid ComfyUI workflow node mapping detected: {refs}")
+        raise HTTPException(
+            status_code=400, detail=COMFYUI_WORKFLOW_NODE_MAPPING_INVALID
+        )
 
 
 def _get_user_provider_urls_keys(user, provider: str) -> tuple[list[str], list[str]]:
@@ -317,7 +363,6 @@ async def verify_url(request: Request, user=Depends(get_admin_user)):
             r.raise_for_status()
             return True
         except Exception:
-            request.app.state.config.ENABLE_IMAGE_GENERATION = False
             raise HTTPException(status_code=400, detail=ERROR_MESSAGES.INVALID_URL)
     elif request.app.state.config.IMAGE_GENERATION_ENGINE == "comfyui":
 
@@ -335,7 +380,6 @@ async def verify_url(request: Request, user=Depends(get_admin_user)):
             r.raise_for_status()
             return True
         except Exception:
-            request.app.state.config.ENABLE_IMAGE_GENERATION = False
             raise HTTPException(status_code=400, detail=ERROR_MESSAGES.INVALID_URL)
     else:
         return True
@@ -429,7 +473,6 @@ def get_image_model(request):
             options = r.json()
             return options["sd_model_checkpoint"]
         except Exception as e:
-            request.app.state.config.ENABLE_IMAGE_GENERATION = False
             raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
 
 
@@ -523,7 +566,12 @@ def get_models(request: Request, user=Depends(get_verified_user)):
             )
             info = r.json()
 
-            workflow = json.loads(request.app.state.config.COMFYUI_WORKFLOW)
+            workflow = _parse_comfyui_workflow_config(request)
+            _validate_comfyui_workflow_node_mapping(
+                workflow,
+                request.app.state.config.COMFYUI_WORKFLOW_NODES,
+                node_type="model",
+            )
             model_node_id = None
 
             for node in request.app.state.config.COMFYUI_WORKFLOW_NODES:
@@ -577,7 +625,6 @@ def get_models(request: Request, user=Depends(get_verified_user)):
                 )
             )
     except Exception as e:
-        request.app.state.config.ENABLE_IMAGE_GENERATION = False
         raise HTTPException(status_code=400, detail=ERROR_MESSAGES.DEFAULT(e))
 
     # Apply model regex filter if configured
@@ -961,6 +1008,10 @@ async def image_generations(
             return images
 
         elif request.app.state.config.IMAGE_GENERATION_ENGINE == "comfyui":
+            workflow = _parse_comfyui_workflow_config(request)
+            _validate_comfyui_workflow_node_mapping(
+                workflow, request.app.state.config.COMFYUI_WORKFLOW_NODES
+            )
             data = {
                 "prompt": form_data.prompt,
                 "width": width,
@@ -982,7 +1033,7 @@ async def image_generations(
                 **{
                     "workflow": ComfyUIWorkflow(
                         **{
-                            "workflow": request.app.state.config.COMFYUI_WORKFLOW,
+                            "workflow": json.dumps(workflow),
                             "nodes": request.app.state.config.COMFYUI_WORKFLOW_NODES,
                         }
                     ),

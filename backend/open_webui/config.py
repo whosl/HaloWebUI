@@ -3038,7 +3038,7 @@ COMFYUI_WORKFLOW = PersistentConfig(
 )
 
 COMFYUI_WORKFLOW_NODES = PersistentConfig(
-    "COMFYUI_WORKFLOW",
+    "COMFYUI_WORKFLOW_NODES",
     "image_generation.comfyui.nodes",
     [],
 )
