@@ -134,12 +134,6 @@
 		return plain;
 	}
 
-	const matchesTagFilter = (item) =>
-		selectedTag === '' || (item.model?.tags ?? []).some((tag) => tag.name === selectedTag);
-
-	const matchesConnectionFilter = (item) =>
-		selectedConnectionType === '' || item.model?.owned_by === selectedConnectionType;
-
 	$: filteredItems = (
 		searchValue
 			? getFuse()
@@ -147,7 +141,14 @@
 					.map((e) => e.item)
 			: items
 	)
-		.filter((item) => matchesTagFilter(item) && matchesConnectionFilter(item))
+		.filter((item) => {
+			const matchesTag =
+				selectedTag === '' || (item.model?.tags ?? []).some((tag) => tag.name === selectedTag);
+			const matchesConnection =
+				selectedConnectionType === '' || item.model?.owned_by === selectedConnectionType;
+
+			return matchesTag && matchesConnection;
+		})
 		.filter((item) => !(item.model?.info?.meta?.hidden ?? false))
 		.sort((a, b) => {
 			if (!searchValue) {
@@ -472,6 +473,7 @@
 						>
 							{#if hasMixedSources || tags.length > 0}
 								<button
+									type="button"
 									class="min-w-fit outline-none p-1.5 {selectedTag === '' &&
 									selectedConnectionType === ''
 										? ''
@@ -487,6 +489,7 @@
 
 							{#if hasMixedSources}
 								<button
+									type="button"
 									class="min-w-fit outline-none p-1.5 {selectedConnectionType === 'ollama'
 										? ''
 										: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} capitalize"
@@ -498,6 +501,7 @@
 									{$i18n.t('Local')}
 								</button>
 								<button
+									type="button"
 									class="min-w-fit outline-none p-1.5 {selectedConnectionType === 'openai'
 										? ''
 										: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} capitalize"
@@ -512,6 +516,7 @@
 
 							{#each tags as tag}
 								<button
+									type="button"
 									class="min-w-fit outline-none p-1.5 {selectedTag === tag
 										? ''
 										: 'text-gray-300 dark:text-gray-600 hover:text-gray-700 dark:hover:text-white'} capitalize"
