@@ -1,19 +1,16 @@
 <script lang="ts">
 	import { SvelteFlowProvider } from '@xyflow/svelte';
-	import { slide } from 'svelte/transition';
 	import { Pane, PaneResizer } from 'paneforge';
 
 	import { onDestroy, onMount, tick } from 'svelte';
-	import { mobile, showControls, showCallOverlay, showOverview, showArtifacts } from '$lib/stores';
+	import { showControls, showCallOverlay, showOverview, showArtifacts } from '$lib/stores';
 
-	import Modal from '../common/Modal.svelte';
 	import Controls from './Controls/Controls.svelte';
 	import CallOverlay from './MessageInput/CallOverlay.svelte';
 	import Drawer from '../common/Drawer.svelte';
 	import Overview from './Overview.svelte';
 	import EllipsisVertical from '../icons/EllipsisVertical.svelte';
 	import Artifacts from './Artifacts.svelte';
-	import { min } from '@floating-ui/utils';
 
 	export let history;
 	export let models = [];
@@ -32,38 +29,120 @@
 
 	export let pane;
 
-	let mediaQuery;
-	let largeScreen = false;
+	type ViewportMode = 'mobile' | 'tablet' | 'desktop';
+
+	const DESKTOP_BREAKPOINT = 1280;
+	const TABLET_BREAKPOINT = 768;
+	const DESKTOP_DEFAULT_WIDTH = 400;
+	const DESKTOP_MIN_WIDTH = 340;
+	const DESKTOP_MAX_WIDTH = 460;
+	const DESKTOP_MAX_RATIO = 0.36;
+	const DESKTOP_SIZE_KEY = 'chatControlsDesktopSize';
+	const LEGACY_SIZE_KEY = 'chatControlsSize';
+
+	let viewportMode: ViewportMode = 'mobile';
 	let dragged = false;
+	let container: HTMLElement | null = null;
+	let resizeObserver: ResizeObserver | null = null;
+	let desktopMinSize = 0;
+	let desktopDefaultSize = 0;
+	let desktopMaxSize = 0;
+	let drawerPlacement: 'bottom' | 'right' = 'bottom';
+	let drawerClassName = '';
 
-	let minSize = 0;
+	const clamp = (value: number, min: number, max: number) => Math.min(max, Math.max(min, value));
 
-	export const openPane = () => {
-		if (parseInt(localStorage?.chatControlsSize)) {
-			pane.resize(parseInt(localStorage?.chatControlsSize));
-		} else {
-			pane.resize(minSize);
+	const getViewportMode = (): ViewportMode => {
+		if (window.innerWidth >= DESKTOP_BREAKPOINT) {
+			return 'desktop';
+		}
+
+		if (window.innerWidth >= TABLET_BREAKPOINT) {
+			return 'tablet';
+		}
+
+		return 'mobile';
+	};
+
+	const getDesktopMaxWidth = (width: number) =>
+		Math.max(DESKTOP_MIN_WIDTH, Math.min(DESKTOP_MAX_WIDTH, Math.floor(width * DESKTOP_MAX_RATIO)));
+
+	const updateDesktopPaneLimits = (width: number) => {
+		if (!width) {
+			return;
+		}
+
+		const maxWidth = getDesktopMaxWidth(width);
+		const defaultWidth = clamp(DESKTOP_DEFAULT_WIDTH, DESKTOP_MIN_WIDTH, maxWidth);
+
+		desktopMinSize = Math.floor((DESKTOP_MIN_WIDTH / width) * 100);
+		desktopDefaultSize = Math.round((defaultWidth / width) * 100);
+		desktopMaxSize = Math.ceil((maxWidth / width) * 100);
+		desktopDefaultSize = clamp(desktopDefaultSize, desktopMinSize, desktopMaxSize);
+	};
+
+	const getStoredDesktopPaneSize = () => {
+		const rawValue =
+			localStorage.getItem(DESKTOP_SIZE_KEY) ?? localStorage.getItem(LEGACY_SIZE_KEY) ?? '';
+		const size = Number.parseFloat(rawValue);
+
+		return Number.isFinite(size) && size > 0 ? size : null;
+	};
+
+	const persistDesktopPaneSize = (size: number) => {
+		const normalized = String(size);
+		localStorage.setItem(DESKTOP_SIZE_KEY, normalized);
+		localStorage.setItem(LEGACY_SIZE_KEY, normalized);
+	};
+
+	const syncCallOverlay = async () => {
+		if ($showCallOverlay) {
+			showCallOverlay.set(false);
+			await tick();
+			showCallOverlay.set(true);
 		}
 	};
 
-	const handleMediaQuery = async (e) => {
-		if (e.matches) {
-			largeScreen = true;
+	const syncViewportMode = async () => {
+		const nextMode = getViewportMode();
+		const modeChanged = nextMode !== viewportMode;
+		viewportMode = nextMode;
 
-			if ($showCallOverlay) {
-				showCallOverlay.set(false);
-				await tick();
-				showCallOverlay.set(true);
-			}
-		} else {
-			largeScreen = false;
+		if (container) {
+			updateDesktopPaneLimits(container.clientWidth);
+		}
 
-			if ($showCallOverlay) {
-				showCallOverlay.set(false);
-				await tick();
-				showCallOverlay.set(true);
-			}
+		if (!modeChanged) {
+			return;
+		}
+
+		await syncCallOverlay();
+
+		if (viewportMode !== 'desktop') {
 			pane = null;
+			return;
+		}
+
+		if ($showControls) {
+			await tick();
+			openPane();
+		}
+	};
+
+	export const openPane = () => {
+		if (viewportMode !== 'desktop' || !pane) {
+			return;
+		}
+
+		const targetSize = clamp(
+			getStoredDesktopPaneSize() ?? desktopDefaultSize,
+			desktopMinSize,
+			desktopMaxSize
+		);
+
+		if (targetSize > 0) {
+			pane.resize(targetSize);
+			persistDesktopPaneSize(targetSize);
 		}
 	};
 
@@ -75,39 +154,39 @@
 		dragged = false;
 	};
 
-	onMount(() => {
-		// listen to resize 1024px
-		mediaQuery = window.matchMedia('(min-width: 1024px)');
+	const clampDesktopPaneSize = (size: number) => {
+		if (desktopMinSize === 0 && desktopMaxSize === 0) {
+			return size;
+		}
 
-		mediaQuery.addEventListener('change', handleMediaQuery);
-		handleMediaQuery(mediaQuery);
+		return clamp(size, desktopMinSize, desktopMaxSize);
+	};
 
-		// Select the container element you want to observe
-		const container = document.getElementById('chat-container');
+	onMount(async () => {
+		container = document.getElementById('chat-container');
 
-		// initialize the minSize based on the container width
-		minSize = Math.floor((350 / container.clientWidth) * 100);
+		if (container) {
+			updateDesktopPaneLimits(container.clientWidth);
 
-		// Create a new ResizeObserver instance
-		const resizeObserver = new ResizeObserver((entries) => {
-			for (let entry of entries) {
-				const width = entry.contentRect.width;
-				// calculate the percentage of 200px
-				const percentage = (350 / width) * 100;
-				// set the minSize to the percentage, must be an integer
-				minSize = Math.floor(percentage);
+			resizeObserver = new ResizeObserver((entries) => {
+				for (const entry of entries) {
+					updateDesktopPaneLimits(entry.contentRect.width);
 
-				if ($showControls) {
-					if (pane && pane.isExpanded() && pane.getSize() < minSize) {
-						pane.resize(minSize);
+					if ($showControls && pane && pane.isExpanded()) {
+						const nextSize = clampDesktopPaneSize(pane.getSize());
+						if (Math.abs(nextSize - pane.getSize()) > 0.1) {
+							pane.resize(nextSize);
+							persistDesktopPaneSize(nextSize);
+						}
 					}
 				}
-			}
-		});
+			});
 
-		// Start observing the container's size changes
-		resizeObserver.observe(container);
+			resizeObserver.observe(container);
+		}
 
+		window.addEventListener('resize', syncViewportMode);
+		await syncViewportMode();
 		document.addEventListener('mousedown', onMouseDown);
 		document.addEventListener('mouseup', onMouseUp);
 	});
@@ -115,7 +194,8 @@
 	onDestroy(() => {
 		showControls.set(false);
 
-		mediaQuery.removeEventListener('change', handleMediaQuery);
+		window.removeEventListener('resize', syncViewportMode);
+		resizeObserver?.disconnect();
 		document.removeEventListener('mousedown', onMouseDown);
 		document.removeEventListener('mouseup', onMouseUp);
 	});
@@ -133,12 +213,20 @@
 	$: if (!chatId) {
 		closeHandler();
 	}
+
+	$: drawerPlacement = viewportMode === 'tablet' ? 'right' : 'bottom';
+	$: drawerClassName =
+		viewportMode === 'tablet'
+			? `h-[100dvh] w-full ${$showCallOverlay || $showOverview || $showArtifacts ? 'max-w-[720px]' : 'max-w-[400px]'} bg-gray-50/95 dark:bg-gray-900/95 dark:text-gray-100 border-l border-gray-200/40 dark:border-gray-700/30 shadow-2xl backdrop-blur-xl`
+			: 'h-[100dvh] w-full bg-gray-50 dark:bg-gray-900 dark:text-gray-100';
 </script>
 
 <SvelteFlowProvider>
-	{#if !largeScreen}
+	{#if viewportMode !== 'desktop'}
 		{#if $showControls}
 			<Drawer
+				placement={drawerPlacement}
+				className={drawerClassName}
 				show={$showControls}
 				on:close={() => {
 					showControls.set(false);
@@ -204,19 +292,15 @@
 		<Pane
 			bind:pane
 			defaultSize={0}
+			minSize={desktopMinSize}
+			maxSize={desktopMaxSize}
 			onResize={(size) => {
-				console.log('size', size, minSize);
-
 				if ($showControls && pane.isExpanded()) {
-					if (size < minSize) {
-						pane.resize(minSize);
+					const nextSize = clampDesktopPaneSize(size);
+					if (Math.abs(nextSize - size) > 0.1) {
+						pane.resize(nextSize);
 					}
-
-					if (size < minSize) {
-						localStorage.chatControlsSize = 0;
-					} else {
-						localStorage.chatControlsSize = size;
-					}
+					persistDesktopPaneSize(nextSize);
 				}
 			}}
 			onCollapse={() => {

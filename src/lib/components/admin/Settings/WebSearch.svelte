@@ -220,9 +220,6 @@
 	};
 
 	const getDefaultWebSearchModeFallback = (): WebSearchMode => {
-		if (webConfig?.ENABLE_WEB_SEARCH && webConfig?.ENABLE_NATIVE_WEB_SEARCH) return 'halo';
-		if (webConfig?.ENABLE_WEB_SEARCH) return 'halo';
-		if (webConfig?.ENABLE_NATIVE_WEB_SEARCH) return 'native';
 		return 'off';
 	};
 
@@ -392,7 +389,7 @@
 				webConfig.ENABLE_NATIVE_WEB_SEARCH = webConfig.ENABLE_NATIVE_WEB_SEARCH ?? false;
 				webConfig.DEFAULT_WEB_SEARCH_MODE = normalizeWebSearchMode(
 					webConfig.DEFAULT_WEB_SEARCH_MODE,
-					'halo'
+					'off'
 				);
 				normalizeNumericWebConfig(webConfig);
 				webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST = listToCsv(webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST);

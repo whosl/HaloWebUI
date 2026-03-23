@@ -160,7 +160,7 @@
 
 	// Privacy / advanced
 	let userLocation = false;
-	let webSearchMode: WebSearchMode = 'halo';
+	let webSearchMode: WebSearchMode = 'off';
 	let iframeSandboxAllowSameOrigin = false;
 	let iframeSandboxAllowForms = false;
 
@@ -396,7 +396,7 @@
 	};
 
 	const onWebSearchChange = (e: CustomEvent<{ value: string }>) => {
-		webSearchMode = normalizeWebSearchMode(e.detail?.value, 'halo');
+		webSearchMode = normalizeWebSearchMode(e.detail?.value, 'off');
 	};
 
 	$: nativeWebSearchCatalogSummary = summarizeNativeWebSearchSupport($models ?? []);
@@ -566,7 +566,7 @@
 		},
 		advanced: {
 			userLocation,
-			webSearchMode: normalizeWebSearchMode(webSearchMode, 'halo'),
+			webSearchMode: normalizeWebSearchMode(webSearchMode, 'off'),
 			iframeSandboxAllowSameOrigin,
 			iframeSandboxAllowForms,
 			hapticFeedback
@@ -641,7 +641,7 @@
 
 	const applyAdvancedSnapshot = (snapshot: SectionSnapshot['advanced']) => {
 		userLocation = snapshot.userLocation;
-		webSearchMode = normalizeWebSearchMode(snapshot.webSearchMode, 'halo');
+		webSearchMode = normalizeWebSearchMode(snapshot.webSearchMode, 'off');
 		iframeSandboxAllowSameOrigin = snapshot.iframeSandboxAllowSameOrigin;
 		iframeSandboxAllowForms = snapshot.iframeSandboxAllowForms;
 		hapticFeedback = snapshot.hapticFeedback;
@@ -1012,7 +1012,7 @@
 			await syncUserLocationPreference();
 			await saveSettings({
 				userLocation,
-				webSearchMode: normalizeWebSearchMode(webSearchMode, 'halo'),
+				webSearchMode: normalizeWebSearchMode(webSearchMode, 'off'),
 				webSearch: null,
 				iframeSandboxAllowSameOrigin,
 				iframeSandboxAllowForms,
@@ -1184,7 +1184,7 @@
 		defaultModelIsAdminLocked = Boolean($config?.default_models);
 
 		backgroundImageUrl = $settings?.backgroundImageUrl ?? null;
-		webSearchMode = getPreferredWebSearchMode($settings, $config, 'halo');
+		webSearchMode = getPreferredWebSearchMode($settings, $config, 'off');
 		iframeSandboxAllowSameOrigin = $settings?.iframeSandboxAllowSameOrigin ?? false;
 		iframeSandboxAllowForms = $settings?.iframeSandboxAllowForms ?? false;
 

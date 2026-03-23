@@ -1020,7 +1020,7 @@
 									/>
 								{/if}
 
-								{#if message.content === '' && message.done && !message.error}
+								{#if message.content === '' && message.done && !message.error && !(message?.files?.length > 0)}
 									<!-- Empty response: model returned 0 tokens without error -->
 									<Error
 										content={$i18n.t(

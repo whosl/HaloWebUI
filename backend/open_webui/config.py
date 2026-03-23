@@ -2565,7 +2565,7 @@ ENABLE_NATIVE_WEB_SEARCH = PersistentConfig(
 DEFAULT_WEB_SEARCH_MODE = PersistentConfig(
     "DEFAULT_WEB_SEARCH_MODE",
     "rag.web.search.default_mode",
-    os.getenv("DEFAULT_WEB_SEARCH_MODE", "halo").strip().lower() or "halo",
+    os.getenv("DEFAULT_WEB_SEARCH_MODE", "off").strip().lower() or "off",
 )
 
 WEB_SEARCH_ENGINE = PersistentConfig(

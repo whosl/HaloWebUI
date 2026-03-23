@@ -158,6 +158,190 @@ def _safe_json_loads(value: Any) -> Any:
         return value
 
 
+_DATA_IMAGE_MARKDOWN_RE = re.compile(
+    r"!\[[^\]]*\]\((data:image/[^)]+)\)", re.IGNORECASE
+)
+
+
+def _build_image_data_url(mime_type: Any, data: Any) -> str:
+    normalized_mime_type = str(mime_type or "").strip() or "image/png"
+    normalized_data = str(data or "").strip()
+    if not normalized_data:
+        return ""
+    return f"data:{normalized_mime_type};base64,{normalized_data}"
+
+
+def _normalize_message_files(files: Any) -> list[dict]:
+    normalized: list[dict] = []
+    seen: set[str] = set()
+
+    def add_file(file_item: Any):
+        item: Optional[dict] = None
+
+        if isinstance(file_item, str):
+            raw_value = file_item.strip()
+            if raw_value.startswith("data:image/"):
+                item = {"type": "image", "url": raw_value}
+        elif isinstance(file_item, dict):
+            candidate = json.loads(json.dumps(file_item, ensure_ascii=False, default=str))
+            file_type = str(candidate.get("type") or "").strip().lower()
+            file_url = str(candidate.get("url") or "").strip()
+            if file_url or file_type or candidate.get("name") or candidate.get("id"):
+                item = candidate
+
+        if not item:
+            return
+
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            return
+        seen.add(key)
+        normalized.append(item)
+
+    def walk(value: Any):
+        if isinstance(value, list):
+            for item in value:
+                walk(item)
+            return
+
+        if isinstance(value, str):
+            text, extracted_files = _extract_image_files_from_text(value)
+            for extracted in extracted_files:
+                add_file(extracted)
+            if text.startswith("data:image/"):
+                add_file(text)
+            return
+
+        if isinstance(value, dict):
+            value_type = str(value.get("type") or "").strip().lower()
+            image_url = value.get("image_url")
+            if isinstance(image_url, dict):
+                image_url = image_url.get("url") or image_url.get("image_url")
+            elif not isinstance(image_url, str):
+                image_url = None
+
+            if value_type in {"image", "image_url", "input_image", "output_image"}:
+                url = str(image_url or value.get("url") or "").strip()
+                if not url:
+                    url = _build_image_data_url(
+                        value.get("mime_type") or value.get("mimeType"),
+                        value.get("data") or value.get("b64_json"),
+                    )
+                if url:
+                    add_file({"type": "image", "url": url})
+                return
+
+            add_file(value)
+            return
+
+        add_file(value)
+
+    walk(files)
+    return normalized
+
+
+def _merge_message_files(existing: Any, incoming: Any) -> list[dict]:
+    return _normalize_message_files([*(existing or []), *(incoming or [])])
+
+
+def _extract_image_files_from_text(text: Any) -> tuple[str, list[dict]]:
+    if not isinstance(text, str) or not text:
+        return ("" if text is None else str(text or "")), []
+
+    if "![" not in text or "data:image/" not in text:
+        return text, []
+
+    files: list[dict] = []
+
+    def replace(match: re.Match) -> str:
+        url = str(match.group(1) or "").strip()
+        if url:
+            files.append({"type": "image", "url": url})
+        return ""
+
+    cleaned = _DATA_IMAGE_MARKDOWN_RE.sub(replace, text)
+    return cleaned.strip(), _merge_message_files(None, files)
+
+
+def _extract_stream_content_and_files(value: Any) -> tuple[str, list[dict]]:
+    if isinstance(value, list):
+        parts: list[str] = []
+        files: list[dict] = []
+
+        for item in value:
+            text_part, file_part = _extract_stream_content_and_files(item)
+            if text_part:
+                parts.append(text_part)
+            if file_part:
+                files = _merge_message_files(files, file_part)
+
+        return "".join(parts), files
+
+    if isinstance(value, dict):
+        item_type = str(value.get("type") or "").strip().lower()
+        if item_type in {"image", "image_url", "input_image", "output_image"}:
+            files = _normalize_message_files(value)
+            return "", files
+
+        nested_content = value.get("content")
+        if isinstance(nested_content, (list, dict)):
+            return _extract_stream_content_and_files(nested_content)
+
+        text_value = (
+            value.get("text")
+            or value.get("content")
+            or value.get("value")
+            or ""
+        )
+        return _extract_stream_content_and_files(text_value)
+
+    if isinstance(value, str):
+        return _extract_image_files_from_text(value)
+
+    return "", []
+
+
+def _consume_stream_image_delta(
+    pending_images: dict[str, dict[str, Any]], image_delta: Any
+) -> Optional[dict]:
+    if not isinstance(image_delta, dict):
+        return None
+
+    image_id = str(image_delta.get("id") or "").strip()
+    if not image_id:
+        return None
+
+    pending = pending_images.get(image_id) or {
+        "mime_type": "image/png",
+        "parts": [],
+    }
+
+    mime_type = str(image_delta.get("mime_type") or "").strip() or pending.get(
+        "mime_type", "image/png"
+    )
+    data = str(image_delta.get("data") or "")
+    final = image_delta.get("final") is True
+
+    pending["mime_type"] = mime_type
+    if data:
+        pending.setdefault("parts", []).append(data)
+    pending_images[image_id] = pending
+
+    if not final:
+        return None
+
+    pending_images.pop(image_id, None)
+
+    url = _build_image_data_url(
+        mime_type,
+        "".join(pending.get("parts") or []),
+    )
+    if not url:
+        return None
+
+    return {"type": "image", "url": url}
+
+
 # ── API error payload builder ────────────────────────────────────────
 _REQUEST_INCOMPATIBLE_PATTERNS = (
     "unknown parameter",
@@ -2627,9 +2811,22 @@ async def process_chat_response(
 
             choices = response.get("choices", [])
             if choices and choices[0].get("message", {}).get("content"):
-                content = response["choices"][0]["message"]["content"]
+                raw_content = response["choices"][0]["message"]["content"]
+                content, message_files = _extract_stream_content_and_files(raw_content)
 
-                if content:
+                if message_files:
+                    await event_emitter(
+                        {
+                            "type": "files",
+                            "data": {"files": message_files},
+                        }
+                    )
+
+                    response["choices"][0]["message"]["files"] = message_files
+
+                response["choices"][0]["message"]["content"] = content
+
+                if content or message_files:
 
                     await event_emitter(
                         {
@@ -2647,6 +2844,7 @@ async def process_chat_response(
                                 "done": True,
                                 "content": content,
                                 "title": title,
+                                **({"files": message_files} if message_files else {}),
                             },
                         }
                     )
@@ -2657,6 +2855,7 @@ async def process_chat_response(
                         metadata["message_id"],
                         {
                             "content": content,
+                            **({"files": message_files} if message_files else {}),
                         },
                     )
 
@@ -2734,60 +2933,6 @@ async def process_chat_response(
 
         # Handle as a background task
         async def post_response_handler(response, events):
-            def normalize_message_files(files: Any) -> list[dict]:
-                normalized: list[dict] = []
-                seen: set[str] = set()
-
-                def add_image(url: Any):
-                    raw_url = str(url or "").strip()
-                    if not raw_url:
-                        return
-                    item = {"type": "image", "url": raw_url}
-                    key = json.dumps(item, ensure_ascii=False, sort_keys=True)
-                    if key in seen:
-                        return
-                    seen.add(key)
-                    normalized.append(item)
-
-                def walk(value: Any):
-                    if isinstance(value, str):
-                        if value.startswith("data:image/"):
-                            add_image(value)
-                        return
-                    if isinstance(value, dict):
-                        value_type = str(value.get("type") or "").strip().lower()
-                        value_url = value.get("url")
-                        if value_url and (not value_type or value_type == "image"):
-                            add_image(value_url)
-                        return
-                    if isinstance(value, list):
-                        for item in value:
-                            walk(item)
-
-                walk(files)
-                return normalized
-
-            def merge_message_files(existing: Any, incoming: Any) -> list[dict]:
-                merged: list[dict] = []
-                seen: set[str] = set()
-
-                for file in [*(existing or []), *(incoming or [])]:
-                    if not isinstance(file, dict):
-                        continue
-                    if str(file.get("type") or "").strip().lower() != "image":
-                        continue
-                    url = str(file.get("url") or "").strip()
-                    if not url:
-                        continue
-                    item = {"type": "image", "url": url}
-                    key = json.dumps(item, ensure_ascii=False, sort_keys=True)
-                    if key in seen:
-                        continue
-                    seen.add(key)
-                    merged.append(item)
-
-                return merged
-
             def serialize_content_blocks(content_blocks, raw=False):
                 content = ""
 
@@ -3237,6 +3382,10 @@ async def process_chat_response(
                 if message
                 else last_assistant_message if last_assistant_message else ""
             )
+            message_files = _merge_message_files(
+                message.get("files") if message else None, None
+            )
+            pending_stream_images: dict[str, dict[str, Any]] = {}
 
             content_blocks = [
                 {
@@ -3357,6 +3506,7 @@ async def process_chat_response(
                 async def stream_body_handler(response):
                     nonlocal content
                     nonlocal content_blocks
+                    nonlocal message_files
                     nonlocal _stream_api_error
                     nonlocal _stream_response_status
                     nonlocal _stream_non_sse_error_lines
@@ -3366,6 +3516,34 @@ async def process_chat_response(
                     stream_tool_repairs: list[dict] = []
                     recovered_missing_index_keys: set[str] = set()
                     emitted_url_citations: set[str] = set()
+
+                    async def emit_new_message_files(new_files: list[dict]) -> None:
+                        nonlocal message_files
+
+                        if not new_files:
+                            return
+
+                        previous_keys = {
+                            json.dumps(file, ensure_ascii=False, sort_keys=True)
+                            for file in _merge_message_files(None, message_files)
+                        }
+                        message_files = _merge_message_files(message_files, new_files)
+                        delta_files = [
+                            file
+                            for file in message_files
+                            if json.dumps(file, ensure_ascii=False, sort_keys=True)
+                            not in previous_keys
+                        ]
+
+                        if not delta_files:
+                            return
+
+                        await event_emitter(
+                            {
+                                "type": "files",
+                                "data": {"files": delta_files},
+                            }
+                        )
 
                     _stream_line_count = 0
                     _stream_data_count = 0
@@ -3707,7 +3885,19 @@ async def process_chat_response(
                                         for key in key_candidates:
                                             tool_call_lookup[key] = resolved_idx
 
-                                value = stringify_stream_content(delta.get("content"))
+                                value, streamed_files = _extract_stream_content_and_files(
+                                    delta.get("content")
+                                )
+                                streamed_image = _consume_stream_image_delta(
+                                    pending_stream_images,
+                                    delta.get("image"),
+                                )
+                                if streamed_image:
+                                    streamed_files = _merge_message_files(
+                                        streamed_files, [streamed_image]
+                                    )
+                                if streamed_files:
+                                    await emit_new_message_files(streamed_files)
 
                                 reasoning_content = extract_reasoning_content(delta)
                                 if not reasoning_content and isinstance(choice, dict):
@@ -3732,8 +3922,23 @@ async def process_chat_response(
                                     reasoning_block["content"] += reasoning_content
 
                                     data = {
-                                        "content": serialize_content_blocks(content_blocks)
+                                        "content": serialize_content_blocks(content_blocks),
+                                        **(
+                                            {"files": message_files}
+                                            if message_files
+                                            else {}
+                                        ),
                                     }
+
+                                if (
+                                    streamed_files
+                                    and not value
+                                    and not reasoning_content
+                                    and not delta_tool_calls
+                                    and not annotations
+                                    and not _raw_usage
+                                ):
+                                    continue
 
                                 if value:
                                         if (
@@ -3827,6 +4032,11 @@ async def process_chat_response(
                                                 "content": serialize_content_blocks(
                                                     content_blocks
                                                 ),
+                                                **(
+                                                    {"files": message_files}
+                                                    if message_files
+                                                    else {}
+                                                ),
                                             }
 
                                 await event_emitter(
@@ -3863,6 +4073,13 @@ async def process_chat_response(
                                     str(e)[:200], line[:300] if isinstance(line, str) else str(line)[:300],
                                 )
                                 continue
+
+                    if pending_stream_images:
+                        log.warning(
+                            "[STREAM IMAGE DROP] discarding %d incomplete streamed image(s)",
+                            len(pending_stream_images),
+                        )
+                        pending_stream_images.clear()
 
                     if (
                         _stream_api_error is None
@@ -6174,6 +6391,7 @@ async def process_chat_response(
                     "done": True,
                     "content": serialize_content_blocks(content_blocks),
                     "title": title,
+                    **({"files": message_files} if message_files else {}),
                 }
 
                 if accumulated_usage:
@@ -6213,6 +6431,7 @@ async def process_chat_response(
                     # Save message in the database
                     _save_payload = {
                         "content": serialize_content_blocks(content_blocks),
+                        **({"files": message_files} if message_files else {}),
                     }
                     if accumulated_usage:
                         _save_payload["usage"] = accumulated_usage

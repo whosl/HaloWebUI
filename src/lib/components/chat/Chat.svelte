@@ -113,8 +113,23 @@
 		parts: string[];
 	};
 	const pendingGeminiImages = new Map<string, Map<string, PendingGeminiImage>>();
-	const buildMarkdownImage = (mimeType: string, data: string) =>
-		`\n![Generated Image](data:${mimeType};base64,${data})\n`;
+	const buildImageDataUrl = (mimeType: string, data: string) =>
+		`data:${mimeType};base64,${data}`;
+	const mergeMessageFiles = (existing: any[] = [], incoming: any[] = []) => {
+		const merged = [];
+		const seen = new Set<string>();
+
+		for (const file of [...existing, ...incoming]) {
+			if (!file || typeof file !== 'object') continue;
+			const normalized = JSON.parse(JSON.stringify(file));
+			const key = JSON.stringify(normalized);
+			if (seen.has(key)) continue;
+			seen.add(key);
+			merged.push(normalized);
+		}
+
+		return merged;
+	};
 	let controlPane;
 	let controlPaneComponent;
 
@@ -367,7 +382,7 @@
 	setContext('floatingChatRequestFactory', buildFloatingChatRequest);
 
 	const getPreferredDefaultWebSearchMode = (): WebSearchMode =>
-		getPreferredWebSearchMode($settings, $config, 'halo');
+		getPreferredWebSearchMode($settings, $config, 'off');
 
 	const resolveStoredWebSearchMode = (
 		value: { webSearchMode?: unknown; webSearchEnabled?: unknown } | null | undefined,
@@ -622,7 +637,10 @@
 				} else if (type === 'chat:message' || type === 'replace') {
 					message.content = data.content;
 				} else if (type === 'chat:message:files' || type === 'files') {
-					message.files = data.files;
+					message.files = mergeMessageFiles(message.files, data.files ?? []);
+					if (autoScroll) {
+						scrollToBottom();
+					}
 				} else if (type === 'chat:message:follow_ups') {
 					message.followUps = data?.follow_ups ?? [];
 					if (autoScroll) {
@@ -1682,14 +1700,17 @@
 		}
 	};
 
-	const consumeGeminiImageDelta = (messageId: string, imageDelta: any): string => {
+	const consumeGeminiImageDelta = (
+		messageId: string,
+		imageDelta: any
+	): { type: 'image'; url: string } | null => {
 		if (!imageDelta || typeof imageDelta !== 'object') {
-			return '';
+			return null;
 		}
 
 		const imageId = typeof imageDelta.id === 'string' && imageDelta.id ? imageDelta.id : null;
 		if (!imageId) {
-			return '';
+			return null;
 		}
 
 		let messageImages = pendingGeminiImages.get(messageId);
@@ -1712,15 +1733,18 @@
 		messageImages.set(imageId, pending);
 
 		if (imageDelta.final !== true) {
-			return '';
+			return null;
 		}
 
-		const markdown = buildMarkdownImage(pending.mimeType, pending.parts.join(''));
+		const imageFile = {
+			type: 'image' as const,
+			url: buildImageDataUrl(pending.mimeType, pending.parts.join(''))
+		};
 		messageImages.delete(imageId);
 		if (messageImages.size === 0) {
 			pendingGeminiImages.delete(messageId);
 		}
-		return markdown;
+		return imageFile;
 	};
 
 	const clearPendingGeminiImages = (messageId: string, warnOnIncomplete = false) => {
@@ -1738,7 +1762,14 @@
 	};
 
 	const chatCompletionEventHandler = async (data, message, chatId) => {
-		const { id, done, choices, content, sources, error, usage } = data;
+		const { id, done, choices, content, sources, error, usage, files } = data;
+
+		if (files) {
+			message.files = mergeMessageFiles(message.files, files);
+			if (autoScroll) {
+				scrollToBottom();
+			}
+		}
 
 		if (error) {
 			clearPendingGeminiImages(message.id, true);
@@ -1760,8 +1791,15 @@
 				} else {
 					// Stream response
 					const delta = choices[0]?.delta ?? {};
-					let value = delta?.content ?? '';
-					value += consumeGeminiImageDelta(message.id, delta?.image);
+					const imageFile = consumeGeminiImageDelta(message.id, delta?.image);
+					if (imageFile) {
+						message.files = mergeMessageFiles(message.files, [imageFile]);
+						if (autoScroll) {
+							scrollToBottom();
+						}
+					}
+
+					const value = delta?.content ?? '';
 					if (!value) {
 						// Partial image chunks are buffered until the final fragment arrives.
 					} else if (message.content == '' && value == '\n') {

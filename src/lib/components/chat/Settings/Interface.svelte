@@ -75,7 +75,7 @@
 	let voiceInterruption = false;
 	let hapticFeedback = false;
 
-	let webSearchMode: WebSearchMode = 'halo';
+	let webSearchMode: WebSearchMode = 'off';
 
 	let iframeSandboxAllowSameOrigin = false;
 	let iframeSandboxAllowForms = false;
@@ -292,7 +292,7 @@
 	}
 
 	const updateWebSearchMode = async (value: unknown) => {
-		webSearchMode = normalizeWebSearchMode(value, 'halo');
+		webSearchMode = normalizeWebSearchMode(value, 'off');
 		saveSettings({ webSearchMode, webSearch: null });
 	};
 
@@ -350,7 +350,7 @@
 		}
 
 		backgroundImageUrl = $settings.backgroundImageUrl ?? null;
-		webSearchMode = getPreferredWebSearchMode($settings, $config, 'halo');
+		webSearchMode = getPreferredWebSearchMode($settings, $config, 'off');
 	});
 </script>
 

@@ -33,7 +33,7 @@ export function normalizeWebSearchMode(
 export function getPreferredWebSearchMode(
 	settingsValue: { webSearchMode?: unknown; webSearch?: unknown } | null | undefined,
 	configValue: { features?: { default_web_search_mode?: unknown } } | null | undefined,
-	fallback: Exclude<WebSearchMode, 'off'> = 'halo'
+	fallback: WebSearchMode = 'off'
 ): WebSearchMode {
 	if (settingsValue && settingsValue.webSearchMode !== undefined && settingsValue.webSearchMode !== null) {
 		return normalizeWebSearchMode(settingsValue.webSearchMode, fallback);

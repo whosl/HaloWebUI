@@ -1,4 +1,5 @@
 import asyncio
+import json
 import socketio
 import logging
 import sys
@@ -406,6 +407,33 @@ async def disconnect(sid):
         # print(f"Unknown session ID {sid} disconnected")
 
 
+def _merge_message_files(existing, incoming) -> list[dict]:
+    merged: list[dict] = []
+    seen: set[str] = set()
+
+    for file in [*(existing or []), *(incoming or [])]:
+        item = None
+
+        if isinstance(file, str):
+            raw_url = file.strip()
+            if raw_url.startswith("data:image/"):
+                item = {"type": "image", "url": raw_url}
+        elif isinstance(file, dict):
+            item = json.loads(json.dumps(file, ensure_ascii=False, default=str))
+
+        if not item:
+            continue
+
+        key = json.dumps(item, ensure_ascii=False, sort_keys=True)
+        if key in seen:
+            continue
+
+        seen.add(key)
+        merged.append(item)
+
+    return merged
+
+
 def get_event_emitter(request_info, update_db=True):
     async def __event_emitter__(event_data):
         user_id = request_info["user_id"]
@@ -468,6 +496,29 @@ def get_event_emitter(request_info, update_db=True):
                         "content": content,
                     },
                 )
+
+            if "type" in event_data and event_data["type"] in {
+                "files",
+                "chat:message:files",
+            }:
+                message = Chats.get_message_by_id_and_message_id(
+                    request_info["chat_id"],
+                    request_info["message_id"],
+                ) or {}
+
+                merged_files = _merge_message_files(
+                    message.get("files"),
+                    event_data.get("data", {}).get("files", []),
+                )
+
+                if merged_files:
+                    Chats.upsert_message_to_chat_by_id_and_message_id(
+                        request_info["chat_id"],
+                        request_info["message_id"],
+                        {
+                            "files": merged_files,
+                        },
+                    )
 
     return __event_emitter__
 

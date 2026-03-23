@@ -37,7 +37,7 @@ const createIsLoadingStore = (i18n: i18nType) => {
 	return isLoading;
 };
 
-export const initI18n = (defaultLocale?: string | undefined) => {
+export const initI18n = async (defaultLocale?: string | undefined) => {
 	let detectionOrder = defaultLocale
 		? ['querystring', 'localStorage']
 		: ['querystring', 'localStorage', 'navigator'];
@@ -46,7 +46,7 @@ export const initI18n = (defaultLocale?: string | undefined) => {
 	const loadResource = (language: string, namespace: string) =>
 		import(`./locales/${language}/${namespace}.json`);
 
-	i18next
+	await i18next
 		.use(resourcesToBackend(loadResource))
 		.use(LanguageDetector)
 		.init({
@@ -78,9 +78,9 @@ export const getLanguages = async () => {
 	const languages = (await import(`./locales/languages.json`)).default;
 	return languages;
 };
-export const changeLanguage = (lang: string) => {
+export const changeLanguage = async (lang: string) => {
 	document.documentElement.setAttribute('lang', lang);
-	i18next.changeLanguage(lang);
+	await i18next.changeLanguage(lang);
 };
 
 export default i18n;
