@@ -181,6 +181,7 @@
 	export let readOnly = false;
 
 	let buttonsContainerElement: HTMLDivElement;
+	let citationsRef: any = null;
 	let buttonsScrollBound = false;
 
 	function setupButtonsScroll() {
@@ -1060,23 +1061,8 @@
 										onTaskClick={async (e) => {
 											console.log(e);
 										}}
-										onSourceClick={async (id, idx) => {
-											console.log(id, idx);
-											let sourceButton = document.getElementById(`source-${message.id}-${idx}`);
-
-											if (sourceButton) {
-												sourceButton.click();
-											} else {
-												// Source list may not be expanded yet; wait and retry
-												await new Promise((resolve) => {
-													requestAnimationFrame(() => {
-														requestAnimationFrame(resolve);
-													});
-												});
-
-												sourceButton = document.getElementById(`source-${message.id}-${idx}`);
-												sourceButton && sourceButton.click();
-											}
+										onSourceClick={async (_id, idx) => {
+											citationsRef?.openCitationByIndex?.(idx);
 										}}
 										onAddMessages={({ modelId, parentId, messages }) => {
 											addMessages({ modelId, parentId, messages });
@@ -1122,7 +1108,11 @@
 					<div class="flex items-end mt-2 gap-3 flex-wrap">
 						{#if (message?.sources || message?.citations) && (model?.info?.meta?.capabilities?.citations ?? true)}
 							<div class="flex-shrink-0">
-								<Citations id={message?.id} sources={message?.sources ?? message?.citations} />
+								<Citations
+									bind:this={citationsRef}
+									id={message?.id}
+									sources={message?.sources ?? message?.citations}
+								/>
 							</div>
 						{/if}
 						{#if message.done || siblings.length > 1}

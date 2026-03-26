@@ -1599,16 +1599,66 @@ def _fill_favicons(results: list[SearchResult]) -> list[SearchResult]:
     return results
 
 
+def _build_direct_docs_from_web_results(
+    query: str,
+    results: list[SearchResult],
+    engine: str,
+) -> Optional[dict]:
+    docs = []
+    filenames = []
+
+    for idx, result in enumerate(results):
+        content = str(result.snippet or "").strip()
+        if not content:
+            continue
+
+        title = str(result.title or "").strip() or "Search Result"
+        link = str(result.link or "").strip()
+        source = link or f"{engine or 'web'}://search/{calculate_sha256_string(f'{query}-{idx}')}"
+
+        metadata = {
+            "source": source,
+            "title": title,
+            "name": title,
+            "query": query,
+            "engine": engine,
+        }
+        if link:
+            metadata["url"] = link
+
+        docs.append(
+            {
+                "content": content,
+                "metadata": metadata,
+            }
+        )
+        filenames.append(source)
+
+    if not docs:
+        return None
+
+    return {
+        "status": True,
+        "collection_name": None,
+        "filenames": filenames,
+        "docs": docs,
+        "loaded_count": len(docs),
+        "failed_count": 0,
+        "direct_content_only": True,
+    }
+
+
 @router.post("/process/web/search")
 async def process_web_search(
     request: Request, form_data: SearchForm, user=Depends(get_verified_user)
 ):
+    engine = str(request.app.state.config.WEB_SEARCH_ENGINE or "").strip()
     try:
         logging.info(
-            f"trying to web search with {request.app.state.config.WEB_SEARCH_ENGINE, form_data.query}"
+            f"trying to web search with {engine, form_data.query}"
         )
         web_results = _fill_favicons(search_web(
-            request, request.app.state.config.WEB_SEARCH_ENGINE, form_data.query
+            request, engine, form_data.query
         ))
     except Exception as e:
         log.exception(e)
@@ -1621,7 +1671,29 @@ async def process_web_search(
     log.debug(f"web_results: {web_results}")
 
     try:
-        urls = [result.link for result in web_results]
+        urls = [str(result.link or "").strip() for result in web_results if str(result.link or "").strip()]
+        if not urls:
+            direct_docs = _build_direct_docs_from_web_results(
+                form_data.query,
+                web_results,
+                engine,
+            )
+            if direct_docs is not None:
+                log.info(
+                    "Web search returned no fetchable URLs; passing raw search content directly"
+                )
+                return direct_docs
+
+            return {
+                "status": True,
+                "collection_name": None,
+                "filenames": [],
+                "docs": [],
+                "loaded_count": 0,
+                "failed_count": 0,
+                "direct_content_only": True,
+            }
+
         from open_webui.retrieval.web.utils import get_web_loader
 
         loader = get_web_loader(

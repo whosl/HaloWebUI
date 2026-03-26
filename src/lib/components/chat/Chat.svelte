@@ -210,6 +210,8 @@
 	let reasoningEffort: string | null = null;
 	let maxThinkingTokens: number | null = null;
 	let lastFreshChatRequest = '';
+	// Flag to prevent sessionStorage recovery from overriding a deliberate fresh chat reset
+	let freshChatActive = false;
 
 	// Bidirectional sync: Controls sidebar params ↔ inline ThinkingControl
 	// 用缓存值打断 reactive 级联：正向同步更新缓存 → 反向 onChange 检测到缓存一致则跳过
@@ -556,7 +558,7 @@
 		})();
 	}
 
-	$: if (selectedModels && chatIdProp !== '') {
+	$: if (selectedModels) {
 		saveSessionSelectedModels();
 	}
 
@@ -567,6 +569,26 @@
 		sessionStorage.selectedModels = JSON.stringify(selectedModels);
 		console.log('saveSessionSelectedModels', selectedModels, sessionStorage.selectedModels);
 	};
+
+	// When models finish loading after page refresh, restore selection from sessionStorage
+	// (initNewChat may have run before models were available, causing modelsMap validation to clear the selection)
+	// Skip restoration when freshChatActive is true — the empty selection is intentional.
+	$: if (
+		modelsMap.size > 0 &&
+		!chatIdProp &&
+		!freshChatActive &&
+		(selectedModels.length === 0 || (selectedModels.length === 1 && selectedModels[0] === ''))
+	) {
+		if (sessionStorage.selectedModels) {
+			try {
+				const stored = JSON.parse(sessionStorage.selectedModels);
+				const valid = stored.filter((id: string) => modelsMap.has(id));
+				if (valid.length > 0) {
+					selectedModels = valid;
+				}
+			} catch {}
+		}
+	}
 
 	$: if (selectedModels) {
 		setToolIds();
@@ -837,7 +859,7 @@
 			if (controlPane && !$mobile) {
 				try {
 					if (value) {
-						controlPaneComponent.openPane();
+						await controlPaneComponent.openPane();
 					} else {
 						controlPane.collapse();
 					}
@@ -1135,6 +1157,7 @@
 
 	const initNewChat = async (options: { fresh?: boolean } = {}) => {
 		const fresh = options.fresh ?? false;
+		freshChatActive = fresh;
 
 		if ($page.url.searchParams.get('models')) {
 			selectedModels = $page.url.searchParams.get('models')?.split(',');
@@ -1165,7 +1188,6 @@
 		} else if (!fresh) {
 			if (sessionStorage.selectedModels) {
 				selectedModels = JSON.parse(sessionStorage.selectedModels);
-				sessionStorage.removeItem('selectedModels');
 			} else {
 				if ($settings?.models) {
 					selectedModels = $settings?.models;
@@ -1178,14 +1200,25 @@
 			selectedModels = $settings?.models;
 		} else if ($config?.default_models) {
 			selectedModels = $config?.default_models.split(',');
+		} else if (fresh) {
+			// fresh=true but no default model configured — reset to empty so user must choose
+			selectedModels = [''];
 		}
 
-		selectedModels = selectedModels.filter((modelId) => modelsMap.has(modelId));
-		if (selectedModels.length === 0 || (selectedModels.length === 1 && selectedModels[0] === '')) {
-			if ($models.length > 0) {
-				selectedModels = [$models[0].id];
-			} else {
-				selectedModels = [''];
+		// Only validate against modelsMap when models are actually loaded.
+		// On page refresh, initNewChat() may run before models load from API —
+		// filtering against an empty modelsMap would discard the valid sessionStorage value.
+		// The recovery block (line 573) and ModelSelector validation handle deferred validation.
+		if (modelsMap.size > 0) {
+			selectedModels = selectedModels.filter((modelId) => modelsMap.has(modelId));
+			if (selectedModels.length === 0 || (selectedModels.length === 1 && selectedModels[0] === '')) {
+				if (!fresh && $models.length > 0) {
+					// Non-fresh: auto-select first available model as fallback
+					selectedModels = [$models[0].id];
+				} else {
+					// Fresh with no default: keep empty so user must choose
+					selectedModels = [''];
+				}
 			}
 		}
 
@@ -1298,7 +1331,10 @@
 			}
 		}
 
-		selectedModels = selectedModels.map((modelId) => (modelsMap.has(modelId) ? modelId : ''));
+		// Only validate model IDs when models are actually loaded
+		if (modelsMap.size > 0) {
+			selectedModels = selectedModels.map((modelId) => (modelsMap.has(modelId) ? modelId : ''));
+		}
 
 		const userSettings = await getUserSettings(localStorage.token);
 
@@ -3204,7 +3240,7 @@
 		{/if}
 
 		<PaneGroup direction="horizontal" class="w-full h-full">
-			<Pane defaultSize={50} class="h-full flex relative max-w-full flex-col">
+			<Pane defaultSize={50} class="h-full flex relative max-w-full min-w-0 flex-col overflow-hidden">
 				<Navbar
 					bind:this={navbarElement}
 					chat={{
@@ -3225,7 +3261,7 @@
 					{initNewChat}
 				/>
 
-				<div class="flex flex-col flex-auto z-10 w-full @container">
+				<div class="flex flex-col flex-auto z-10 w-full min-w-0 @container">
 					{#if $settings?.landingPageMode === 'chat' || hasMessages}
 							<div
 								class=" pb-2.5 flex flex-col justify-between w-full flex-auto overflow-auto h-0 max-w-full z-10 scrollbar-hidden"

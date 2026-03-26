@@ -243,6 +243,7 @@
 					} else {
 						artifactPreviewTarget.set(null);
 					}
+					showOverview.set(false);
 					showArtifacts.set(true);
 					showControls.set(true);
 				}

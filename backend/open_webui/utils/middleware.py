@@ -244,6 +244,18 @@ def _merge_message_files(existing: Any, incoming: Any) -> list[dict]:
     return _normalize_message_files([*(existing or []), *(incoming or [])])
 
 
+def normalize_message_files(files: Any) -> list[dict]:
+    # Backward-compatible alias for call sites introduced before helpers were
+    # promoted to module scope with private-prefixed names.
+    return _normalize_message_files(files)
+
+
+def merge_message_files(existing: Any, incoming: Any) -> list[dict]:
+    # Keep the legacy helper name available so older orchestration paths do not
+    # fail with NameError during tool result post-processing.
+    return _merge_message_files(existing, incoming)
+
+
 def _extract_image_files_from_text(text: Any) -> tuple[str, list[dict]]:
     if not isinstance(text, str) or not text:
         return ("" if text is None else str(text or "")), []
@@ -713,6 +725,18 @@ _NATIVE_FILE_INPUT_RETRY_PATTERNS = (
     "purpose",
     "user_data",
 )
+
+
+def _get_builtin_web_tools_to_suppress(effective_mode: Any) -> set[str]:
+    mode = _normalize_web_search_mode(effective_mode, WEB_SEARCH_MODE_OFF)
+
+    if mode == WEB_SEARCH_MODE_HALO:
+        return {"search_web"}
+
+    if mode == WEB_SEARCH_MODE_NATIVE:
+        return {"search_web", "fetch_url", "fetch_url_rendered"}
+
+    return set()
 
 
 def _parse_generation_response_payload(response: Any) -> Optional[dict]:
@@ -2432,11 +2456,16 @@ async def process_chat_payload(request, form_data, user, metadata, model):
         or metadata.get("preview_tool_compat")
     ):
         builtin_tools = get_builtin_tools(request, user, metadata)
-        if metadata.get("effective_web_search_mode") == WEB_SEARCH_MODE_NATIVE:
-            # When model-native web search is active, do not expose Halo web tools in the
-            # same request. Otherwise the model may prefer `search_web`/`fetch_url`
-            # function tools over the upstream native `web_search` tool.
-            for tool_name in ("search_web", "fetch_url", "fetch_url_rendered"):
+        suppressed_web_tools = _get_builtin_web_tools_to_suppress(
+            metadata.get("effective_web_search_mode")
+        )
+        if suppressed_web_tools:
+            # Keep search responsibilities in a single runtime path:
+            # - HALO mode performs server-side web search up front, so `search_web`
+            #   should not be re-exposed to the model in the same request.
+            # - NATIVE mode should rely on the upstream provider's web search path
+            #   instead of Halo fallback tools.
+            for tool_name in suppressed_web_tools:
                 builtin_tools.pop(tool_name, None)
         if builtin_tools:
             log.info(f"[BUILTIN TOOLS] Injecting: {list(builtin_tools.keys())}")
@@ -5421,7 +5450,7 @@ async def process_chat_response(
                                 async with governor_lock:
                                     tool_exec_fetch += 1
 
-                        tool_result_files = normalize_message_files(tool_result)
+                        tool_result_files = _normalize_message_files(tool_result)
                         if isinstance(tool_result, list):
                             kept_items = []
                             for item in tool_result:
@@ -5571,9 +5600,9 @@ async def process_chat_response(
                         except Exception:
                             pass
 
-                        exec_item_files = normalize_message_files(exec_item.get("files"))
+                        exec_item_files = _normalize_message_files(exec_item.get("files"))
                         if exec_item_files:
-                            round_message_files = merge_message_files(
+                            round_message_files = _merge_message_files(
                                 round_message_files, exec_item_files
                             )
 
@@ -5594,7 +5623,7 @@ async def process_chat_response(
                             existing_message = Chats.get_message_by_id_and_message_id(
                                 metadata["chat_id"], metadata["message_id"]
                             ) or {}
-                            merged_message_files = merge_message_files(
+                            merged_message_files = _merge_message_files(
                                 existing_message.get("files"), round_message_files
                             )
                             if merged_message_files:
