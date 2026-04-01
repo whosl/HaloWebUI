@@ -271,7 +271,6 @@
 	};
 
 	let defaultModelId = '';
-	let defaultModelIsAdminLocked = false;
 	let appearanceSaving = false;
 	let layoutSaving = false;
 	let inputSaving = false;
@@ -326,11 +325,6 @@
 	};
 
 	const getEffectiveDefaultModelId = () => {
-		const adminDefaultModelId = normalizeModelId($config?.default_models?.split(',')[0]);
-		if (adminDefaultModelId) {
-			return adminDefaultModelId;
-		}
-
 		return normalizeModelId($settings?.models?.at(0));
 	};
 
@@ -527,7 +521,6 @@
 			enableAutoScrollOnStreaming
 		},
 		layout: {
-			defaultModelId: normalizeModelId(defaultModelId),
 			showChatTitleInTab,
 			landingPageMode,
 			chatBubble,
@@ -552,6 +545,7 @@
 			promptSuggestions
 		},
 		chat: {
+			defaultModelId: normalizeModelId(defaultModelId),
 			titleAutoGenerate,
 			autoTags,
 			autoFollowUps,
@@ -919,7 +913,6 @@
 			await ensureNotificationPermission();
 
 			const payload: Record<string, any> = {
-				models: normalizeModelId(defaultModelId) ? [normalizeModelId(defaultModelId)] : [],
 				showChatTitleInTab,
 				landingPageMode,
 				chatBubble,
@@ -986,6 +979,7 @@
 		chatSaving = true;
 		try {
 			await saveSettings({
+				models: normalizeModelId(defaultModelId) ? [normalizeModelId(defaultModelId)] : [],
 				title: {
 					...($settings?.title ?? {}),
 					auto: titleAutoGenerate
@@ -1205,7 +1199,6 @@
 		imageCompressionPreset = detectPreset(imageCompressionSize);
 
 		defaultModelId = getEffectiveDefaultModelId();
-		defaultModelIsAdminLocked = Boolean($config?.default_models);
 
 		backgroundImageUrl = $settings?.backgroundImageUrl ?? null;
 		webSearchMode = getPreferredWebSearchMode($settings, $config, 'off');
@@ -1560,45 +1553,6 @@
 									on:reset={resetLayoutChanges}
 									on:save={saveLayoutChanges}
 								/>
-								<div
-									class="space-y-3"
-								>
-									<div class="text-sm font-medium text-gray-500 dark:text-gray-400 pl-1 mb-2">
-										{$i18n.t('Set Default Model')}
-									</div>
-									<div class="flex items-center gap-3">
-										<HaloSelect
-											className="flex-1"
-											bind:value={defaultModelId}
-											disabled={defaultModelIsAdminLocked}
-											searchEnabled={true}
-											placeholder={$i18n.t('Select a model')}
-											searchPlaceholder={$i18n.t('Search a model')}
-											noResultsText={$i18n.t('No results found')}
-											options={[
-												{ value: '', label: $i18n.t('None') },
-												...($models ?? []).map((m) => ({
-													value: m.id,
-													label: getModelChatDisplayName(m)
-												}))
-											]}
-										/>
-									</div>
-									{#if modelsLoading && ($models?.length ?? 0) === 0}
-										<div class="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-											<Spinner className="size-3.5" />
-											<span>{$i18n.t('Loading...')}</span>
-										</div>
-									{:else if modelsLoadError && ($models?.length ?? 0) === 0}
-										<div class="mt-2 text-xs text-amber-600 dark:text-amber-400">
-											{modelsLoadError}
-										</div>
-									{/if}
-									{#if defaultModelIsAdminLocked}
-										<div class="text-xs text-gray-500 mt-2">{$i18n.t('Controlled by admin')}</div>
-									{/if}
-								</div>
-
 								<div
 									class="space-y-3"
 								>
@@ -2049,6 +2003,47 @@
 								<div
 									class="space-y-3"
 								>
+									<!-- Personal Default Model -->
+									<div class="space-y-2">
+										<div class="glass-item px-4 py-3">
+											<div class="flex items-center justify-between gap-3">
+												<div class="min-w-0">
+													<div class="text-sm font-medium">
+														{$i18n.t('Default Model')}
+													</div>
+													<div class="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+														{$i18n.t('Applies to this account only')}
+													</div>
+												</div>
+												<HaloSelect
+													className="w-60 shrink-0"
+													bind:value={defaultModelId}
+													searchEnabled={true}
+													placeholder={$i18n.t('Select a model')}
+													searchPlaceholder={$i18n.t('Search a model')}
+													noResultsText={$i18n.t('No results found')}
+													options={[
+														{ value: '', label: $i18n.t('None') },
+														...($models ?? []).map((m) => ({
+															value: m.id,
+															label: getModelChatDisplayName(m)
+														}))
+													]}
+												/>
+											</div>
+											{#if modelsLoading && ($models?.length ?? 0) === 0}
+												<div class="mt-2 flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
+													<Spinner className="size-3.5" />
+													<span>{$i18n.t('Loading...')}</span>
+												</div>
+											{:else if modelsLoadError && ($models?.length ?? 0) === 0}
+												<div class="mt-2 text-xs text-amber-600 dark:text-amber-400">
+													{modelsLoadError}
+												</div>
+											{/if}
+										</div>
+									</div>
+
 									<!-- Sub-group A: Auto Generation -->
 									<div class="text-sm font-medium text-gray-500 dark:text-gray-400 pl-1">
 										{$i18n.t('Auto Generation')}

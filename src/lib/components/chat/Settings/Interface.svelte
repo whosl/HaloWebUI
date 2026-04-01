@@ -268,7 +268,7 @@
 
 	const updateInterfaceHandler = async () => {
 		saveSettings({
-			models: [defaultModelId],
+			models: defaultModelId ? [defaultModelId] : [],
 			imageCompressionSize: imageCompressionSize
 		});
 	};
@@ -352,9 +352,6 @@
 		imageCompressionSize = $settings.imageCompressionSize ?? { width: '', height: '' };
 
 		defaultModelId = $settings?.models?.at(0) ?? '';
-		if ($config?.default_models) {
-			defaultModelId = $config.default_models.split(',')[0];
-		}
 
 		backgroundImageUrl = $settings.backgroundImageUrl ?? null;
 		webSearchMode = getPreferredWebSearchMode($settings, $config, 'off');

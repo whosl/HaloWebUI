@@ -1191,15 +1191,10 @@
 			} else {
 				if ($settings?.models) {
 					selectedModels = $settings?.models;
-				} else if ($config?.default_models) {
-					console.log($config?.default_models.split(',') ?? '');
-					selectedModels = $config?.default_models.split(',');
 				}
 			}
 		} else if ($settings?.models) {
 			selectedModels = $settings?.models;
-		} else if ($config?.default_models) {
-			selectedModels = $config?.default_models.split(',');
 		} else if (fresh) {
 			// fresh=true but no default model configured — reset to empty so user must choose
 			selectedModels = [''];

@@ -1376,7 +1376,9 @@ DEFAULT_LOCALE = PersistentConfig(
 )
 
 DEFAULT_MODELS = PersistentConfig(
-    "DEFAULT_MODELS", "ui.default_models", os.environ.get("DEFAULT_MODELS", None)
+    "DEFAULT_MODELS",
+    "ui.default_models",
+    "",
 )
 
 DEFAULT_PROMPT_SUGGESTIONS = PersistentConfig(
@@ -1418,6 +1420,19 @@ MODEL_ORDER_LIST = PersistentConfig(
     "ui.model_order_list",
     [],
 )
+
+if os.environ.get("DEFAULT_MODELS") not in (None, ""):
+    log.warning(
+        "DEFAULT_MODELS is deprecated and ignored. Default models are now user-scoped."
+    )
+
+if DEFAULT_MODELS.value not in (None, ""):
+    log.warning(
+        "Clearing deprecated persistent DEFAULT_MODELS value. Default models are now user-scoped."
+    )
+    DEFAULT_MODELS.value = ""
+    if ENABLE_PERSISTENT_CONFIG:
+        DEFAULT_MODELS.save()
 
 DEFAULT_USER_ROLE = PersistentConfig(
     "DEFAULT_USER_ROLE",
