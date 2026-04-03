@@ -50,6 +50,8 @@ COMFYUI_WORKFLOW_NODE_MAPPING_INVALID = (
 IMAGE_MODEL_DISCOVERY_CACHE_TTL_SECONDS = 60.0
 IMAGE_MODEL_DISCOVERY_CACHE_MAX_ENTRIES = 64
 IMAGE_MODEL_DISCOVERY_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+MARKDOWN_IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
+DATA_IMAGE_URL_RE = re.compile(r"data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+", re.IGNORECASE)
 
 OPENAI_IMAGE_FAMILY_PREFIXES = ("dall-e", "dalle", "gpt-image")
 VOLCENGINE_IMAGES_ENDPOINT_HINTS = ("seedream", "seededit")
@@ -820,13 +822,15 @@ def _list_image_provider_sources(
         request, provider, shared_base_url
     )
 
-    def _build_shared_source(*, for_settings: bool = False) -> Optional[dict[str, Any]]:
+    def _build_shared_source(
+        *, for_settings: bool = False, fallback_to_global_key: bool = False
+    ) -> Optional[dict[str, Any]]:
         if not shared_base_url:
             return None
 
         resolved_key = shared_key
         resolved_api_config = dict(image_api_config)
-        if for_settings and not resolved_key and shared_global_key:
+        if (for_settings or fallback_to_global_key) and not resolved_key and shared_global_key:
             resolved_key = shared_global_key
             if isinstance(shared_api_config, dict):
                 resolved_api_config = {**shared_api_config, **resolved_api_config}
@@ -844,7 +848,7 @@ def _list_image_provider_sources(
         }
 
     if context == "settings":
-        settings_source = _build_shared_source(for_settings=True)
+        settings_source = _build_shared_source(for_settings=True, fallback_to_global_key=True)
         return [settings_source] if settings_source is not None else []
 
     personal_urls, personal_keys, personal_cfgs = _get_provider_user_connection_bundle(
@@ -885,16 +889,8 @@ def _list_image_provider_sources(
         return sources
 
     if credential_source == "shared":
-        if not shared_enabled:
-            if strict:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Workspace shared key is disabled by the administrator.",
-                )
-            return []
-
-        shared_source = _build_shared_source()
-        if shared_source is None or not shared_available:
+        shared_source = _build_shared_source(fallback_to_global_key=True)
+        if shared_source is None or not str(shared_source.get("key") or "").strip():
             if strict:
                 raise HTTPException(
                     status_code=400,
@@ -2167,6 +2163,33 @@ def _load_generated_image_from_value(
     return loaded
 
 
+def _extract_generated_image_values_from_text(text: str) -> list[str]:
+    raw_text = str(text or "").strip()
+    if not raw_text:
+        return []
+
+    values: list[str] = []
+    seen: set[str] = set()
+
+    def _append(value: Optional[str]) -> None:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            return
+        seen.add(normalized)
+        values.append(normalized)
+
+    for match in MARKDOWN_IMAGE_URL_RE.findall(raw_text):
+        _append(match)
+
+    for match in DATA_IMAGE_URL_RE.findall(raw_text):
+        _append(match)
+
+    if raw_text.startswith(("http://", "https://", "data:image/")):
+        _append(raw_text)
+
+    return values
+
+
 def _extract_generated_image_payload(
     item: Any,
     *,
@@ -2241,6 +2264,20 @@ def _extract_generated_image_payload(
         if loaded:
             return loaded
 
+    for text_key in ("text", "output_text", "content"):
+        text_value = item.get(text_key)
+        if not isinstance(text_value, str):
+            continue
+        for candidate in _extract_generated_image_values_from_text(text_value):
+            loaded = _load_generated_image_from_value(
+                candidate,
+                headers=headers,
+                allowed_base_urls=allowed_base_urls,
+                mime_type_hint=mime_type_hint,
+            )
+            if loaded:
+                return loaded
+
     return None
 
 
@@ -2257,6 +2294,13 @@ def _extract_generated_images_from_openai_response(
             value = body.get(key)
             if isinstance(value, list):
                 items.extend(value)
+            elif isinstance(value, dict):
+                items.append(value)
+
+        for key in ("output_text", "text", "content"):
+            value = body.get(key)
+            if isinstance(value, str):
+                items.append({"text": value})
 
         choices = body.get("choices")
         if isinstance(choices, list):
@@ -2272,6 +2316,8 @@ def _extract_generated_images_from_openai_response(
                         items.extend(content)
                     elif isinstance(content, dict):
                         items.append(content)
+                    elif isinstance(content, str):
+                        items.append({"text": content})
 
     images: list[tuple[bytes, str]] = []
     for item in items:

@@ -142,7 +142,7 @@ export const WORKSPACE_TABS: WorkspaceTabMeta[] = [
 		key: 'images',
 		href: '/workspace/images',
 		labelKey: 'Images',
-		descKey: 'Generate images with workspace-approved models, sizes, and key sources.',
+		descKey: 'Generate images with the workspace default model, size, and steps.',
 		badgeColor: 'bg-sky-50 dark:bg-sky-950/30',
 		iconColor: 'text-sky-500 dark:text-sky-400',
 		iconPaths: [

@@ -20,6 +20,7 @@
 		import Sparkles from '$lib/components/icons/Sparkles.svelte';
 		import { WEBUI_NAME, settings, user } from '$lib/stores';
 		import { copyToClipboard } from '$lib/utils';
+		import { localizeCommonError } from '$lib/utils/common-errors';
 		import {
 			GEMINI_IMAGE_SIZE_OPTIONS,
 			IMAGE_ASPECT_RATIO_OPTIONS,
@@ -41,6 +42,8 @@
 	};
 
 	const i18n = getContext('i18n');
+	const formatError = (error: unknown) =>
+		localizeCommonError(error, (key, options) => $i18n.t(key, options));
 
 	export let variant: 'playground' | 'workspace' = 'playground';
 
@@ -535,7 +538,7 @@
 				);
 			}
 		} catch (err) {
-			toast.error(`${err}`);
+			toast.error(formatError(err));
 		}
 
 		loading = false;

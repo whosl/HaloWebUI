@@ -126,6 +126,69 @@ def test_image_runtime_shared_source_keeps_image_force_mode_while_merging_global
     assert source["api_config"]["force_mode"] is True
 
 
+def test_image_runtime_explicit_shared_source_uses_shared_config_even_when_toggle_is_disabled():
+    cfg = SimpleNamespace(
+        IMAGES_OPENAI_API_BASE_URL="https://api.example.com/v1",
+        IMAGES_OPENAI_API_KEY="image-key",
+        IMAGES_OPENAI_API_FORCE_MODE=False,
+        OPENAI_API_BASE_URLS=["https://api.example.com/v1"],
+        OPENAI_API_KEYS=["global-key"],
+        OPENAI_API_CONFIGS={},
+        ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+        IMAGES_GEMINI_API_BASE_URL="",
+        IMAGES_GEMINI_API_KEY="",
+        IMAGES_GEMINI_API_FORCE_MODE=False,
+        GEMINI_API_BASE_URLS=[],
+        GEMINI_API_KEYS=[],
+        GEMINI_API_CONFIGS={},
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=cfg)))
+
+    source = _resolve_image_provider_source(
+        request,
+        user=None,
+        provider="openai",
+        context="runtime",
+        credential_source="shared",
+    )
+
+    assert source is not None
+    assert source["effective_source"] == "shared"
+    assert source["key"] == "image-key"
+
+
+def test_image_runtime_explicit_shared_source_can_fallback_to_global_key():
+    cfg = SimpleNamespace(
+        IMAGES_OPENAI_API_BASE_URL="https://api.example.com/v1",
+        IMAGES_OPENAI_API_KEY="",
+        IMAGES_OPENAI_API_FORCE_MODE=False,
+        OPENAI_API_BASE_URLS=["https://api.example.com/v1"],
+        OPENAI_API_KEYS=["global-key"],
+        OPENAI_API_CONFIGS={"0": {"auth_type": "bearer"}},
+        ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+        IMAGES_GEMINI_API_BASE_URL="",
+        IMAGES_GEMINI_API_KEY="",
+        IMAGES_GEMINI_API_FORCE_MODE=False,
+        GEMINI_API_BASE_URLS=[],
+        GEMINI_API_KEYS=[],
+        GEMINI_API_CONFIGS={},
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=cfg)))
+
+    source = _resolve_image_provider_source(
+        request,
+        user=None,
+        provider="openai",
+        context="runtime",
+        credential_source="shared",
+    )
+
+    assert source is not None
+    assert source["effective_source"] == "shared"
+    assert source["key"] == "global-key"
+    assert source["api_config"]["auth_type"] == "bearer"
+
+
 def test_image_settings_source_normalizes_legacy_openai_base_url_without_v1():
     cfg = SimpleNamespace(
         IMAGES_OPENAI_API_BASE_URL="https://api.example.com",
