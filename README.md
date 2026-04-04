@@ -72,6 +72,14 @@ docker compose up -d
 
 启动完成后访问 **http://localhost:3000** ，首次注册的用户自动成为管理员。
 
+### MCP stdio 说明
+
+- 官方 `main` 镜像已内置 `uv/uvx`，可直接用于 `Fetch`、`Time` 等 Python 型 stdio MCP 预设。
+- `npx` / Node.js 型 stdio MCP 仍需你自行在服务端镜像中准备对应 runtime。
+- stdio MCP 命令运行在 HaloWebUI 服务端容器内，不是在浏览器或你的本机 shell 里执行。
+- `docker exec` 进入容器后能运行某个命令，不代表临时 shell 路径一定适合长期配置为 MCP command；请优先使用镜像内稳定安装路径或服务主进程可见的常规 `PATH`，避免依赖 `fnm_multishells/...` 这类临时路径。
+- stdio MCP 本身不会长期常驻占用额外内存；额外内存主要来自实际启动的 MCP 子进程，空闲后会按系统配置自动回收。
+
 <details>
 <summary><strong>⚙️ 常用环境变量</strong></summary>
 

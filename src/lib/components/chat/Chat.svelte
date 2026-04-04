@@ -648,11 +648,7 @@
 		}
 	}
 
-	$: if (selectedModels) {
-		setToolIds();
-	}
-
-	$: if (atSelectedModel || selectedModels) {
+	$: if ($tools && (atSelectedModel || selectedModels)) {
 		setToolIds();
 	}
 

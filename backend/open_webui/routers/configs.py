@@ -3,14 +3,14 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, Depends, Request, HTTPException
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from typing import Dict, List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.config import get_config, save_config
 from open_webui.config import BannerModel
 
 from open_webui.utils.tools import get_tool_server_data, get_tool_servers_data
-from open_webui.utils.mcp import get_mcp_server_data
+from open_webui.utils.mcp import get_mcp_runtime_capabilities, get_mcp_server_data
 from open_webui.utils.user_tools import (
     MAX_TOOL_CALL_ROUNDS_DEFAULT,
     MAX_TOOL_CALL_ROUNDS_MAX,
@@ -338,13 +338,21 @@ def _normalize_mcp_server_connection(connection: MCPServerConnection) -> dict:
 
 class MCPServersConfigForm(BaseModel):
     MCP_SERVER_CONNECTIONS: list[MCPServerConnection]
+    MCP_RUNTIME_CAPABILITIES: Dict[str, Any] = Field(default_factory=dict)
+
+
+def _build_mcp_servers_config_response(connections: list[dict]) -> dict:
+    return {
+        "MCP_SERVER_CONNECTIONS": connections,
+        "MCP_RUNTIME_CAPABILITIES": get_mcp_runtime_capabilities(),
+    }
 
 
 @router.get("/mcp_servers", response_model=MCPServersConfigForm)
 async def get_mcp_servers_config(request: Request, user=Depends(get_verified_user)):
-    return {
-        "MCP_SERVER_CONNECTIONS": get_user_mcp_server_connections(request, user),
-    }
+    return _build_mcp_servers_config_response(
+        get_user_mcp_server_connections(request, user)
+    )
 
 
 @router.post("/mcp_servers", response_model=MCPServersConfigForm)
@@ -367,9 +375,7 @@ async def set_mcp_servers_config(
 
     set_user_mcp_server_connections(user, connections)
 
-    return {
-        "MCP_SERVER_CONNECTIONS": connections,
-    }
+    return _build_mcp_servers_config_response(connections)
 
 
 @router.post("/mcp_servers/verify")

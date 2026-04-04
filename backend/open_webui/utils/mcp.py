@@ -7,9 +7,10 @@ import re
 import shutil
 import ssl
 import time
+from collections import deque
 from copy import deepcopy
 from datetime import datetime, timezone
-from typing import Any, Callable, Coroutine, Dict, List, Optional, Set, Tuple
+from typing import Any, Callable, Coroutine, Deque, Dict, List, Optional, Set, Tuple
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -35,9 +36,18 @@ SUPPORTED_MCP_PROTOCOL_VERSIONS = [
 ]
 DEFAULT_MCP_PROTOCOL_VERSION = "2025-06-18"
 DEFAULT_STDIO_ALLOWED_COMMANDS = {"npx", "node", "python", "python3", "uvx", "uv", "deno"}
+DEFAULT_MCP_PRESET_RUNTIME_COMMANDS = ("npx", "uvx")
 USER_FACING_SELECTION_ERROR = "所选 MCP 服务器当前不可用，请前往 设置 > 工具 重新验证。"
 VERSION_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
 MCP_TOOL_ID_RE = re.compile(r"^mcp:(\d+)$")
+STDIO_STDERR_TAIL_LINES = 12
+STDIO_STDERR_TAIL_CHARS = 1200
+STDIO_START_TRANSPORT_ERROR_MARKERS = (
+    "WriteUnixTransport",
+    "handler is closed",
+    "process is not running",
+    "closed stdout before sending a response",
+)
 
 
 class MCPHttpError(RuntimeError):
@@ -249,10 +259,52 @@ def _validate_stdio_command(connection: Dict[str, Any]) -> str:
             raise ValueError(f"命令不可执行: {command}")
         return command
 
-    resolved = shutil.which(command)
+    resolved = _resolve_stdio_command(connection, command)
     if not resolved:
         raise ValueError(_friendly_missing_command_message(command_name))
     return resolved
+
+
+def _resolve_stdio_command(connection: Dict[str, Any], command: str) -> Optional[str]:
+    env = _build_stdio_env(connection)
+
+    resolved = shutil.which(command, path=env.get("PATH"))
+    if resolved:
+        return resolved
+
+    home = env.get("HOME")
+    if not home:
+        return None
+
+    fallback = os.path.join(home, ".local", "bin", os.path.basename(command))
+    if os.path.isfile(fallback) and os.access(fallback, os.X_OK):
+        return fallback
+
+    return None
+
+
+def _build_mcp_runtime_command_capability(command: str) -> Dict[str, Any]:
+    resolved = _resolve_stdio_command({}, command)
+    return {
+        "available": bool(resolved),
+        "message": None if resolved else _friendly_missing_command_message(command),
+    }
+
+
+def get_mcp_runtime_capabilities(
+    preset_commands: Optional[List[str]] = None,
+) -> Dict[str, Dict[str, Dict[str, Any]]]:
+    commands: Dict[str, Dict[str, Any]] = {}
+    seen: Set[str] = set()
+
+    for raw_command in preset_commands or list(DEFAULT_MCP_PRESET_RUNTIME_COMMANDS):
+        command = os.path.basename(str(raw_command or "").strip()).lower()
+        if not command or command in seen:
+            continue
+        seen.add(command)
+        commands[command] = _build_mcp_runtime_command_capability(command)
+
+    return {"commands": commands}
 
 
 def _build_stdio_env(connection: Dict[str, Any]) -> Dict[str, str]:
@@ -541,6 +593,7 @@ class MCPStdioClient:
         self._server_info: Dict[str, Any] = {}
         self._capabilities: Dict[str, Any] = {}
         self._cached_tools: Optional[List[Dict[str, Any]]] = None
+        self._stderr_tail: Deque[str] = deque(maxlen=STDIO_STDERR_TAIL_LINES)
 
     @property
     def tainted(self) -> bool:
@@ -557,6 +610,45 @@ class MCPStdioClient:
     def is_alive(self) -> bool:
         return self.process is not None and self.process.returncode is None
 
+    def _get_recent_stderr(self) -> str:
+        if not self._stderr_tail:
+            return ""
+
+        stderr_output = "\n".join(self._stderr_tail).strip()
+        if len(stderr_output) <= STDIO_STDERR_TAIL_CHARS:
+            return stderr_output
+        return "..." + stderr_output[-STDIO_STDERR_TAIL_CHARS:]
+
+    async def _build_initialization_failure_message(self, exc: Exception) -> str:
+        process = self.process
+        if process and process.returncode is None:
+            with contextlib.suppress(asyncio.TimeoutError, Exception):
+                await asyncio.wait_for(process.wait(), timeout=0.05)
+
+        await asyncio.sleep(0)
+
+        exit_code = process.returncode if process else None
+        stderr_output = self._get_recent_stderr()
+        exc_text = str(exc).strip()
+        is_transport_error = any(
+            marker in exc_text for marker in STDIO_START_TRANSPORT_ERROR_MARKERS
+        )
+
+        if exit_code is None and not is_transport_error:
+            return exc_text or "MCP stdio server failed during initialization."
+
+        base = "MCP stdio server exited before initialization."
+        if exit_code is not None:
+            base = f"MCP stdio server exited before initialization (exit code {exit_code})."
+
+        if stderr_output:
+            return f"{base}\nstderr:\n{stderr_output}"
+
+        if exc_text and not is_transport_error:
+            return f"{base}\n{exc_text}"
+
+        return f"{base}\n进程提前退出，未返回 MCP initialize 响应。"
+
     async def _pump_stderr(self) -> None:
         if not self.process or not self.process.stderr:
             return
@@ -568,6 +660,7 @@ class MCPStdioClient:
                     break
                 text = line.decode("utf-8", errors="ignore").rstrip()
                 if text:
+                    self._stderr_tail.append(text)
                     log.debug("MCP stdio stderr[%s]: %s", self.user_id or "unknown", text)
         except asyncio.CancelledError:
             raise
@@ -774,6 +867,7 @@ class MCPStdioClient:
             self._resolved_command = _validate_stdio_command(self.connection)
             args = _normalize_stdio_args(self.connection)
             env = _build_stdio_env(self.connection)
+            self._stderr_tail.clear()
 
             self.process = await asyncio.create_subprocess_exec(
                 self._resolved_command,
@@ -797,10 +891,11 @@ class MCPStdioClient:
                     self.notify_initialized(), timeout=MCP_STDIO_START_TIMEOUT
                 )
                 self._ready = True
-            except Exception:
+            except Exception as exc:
+                message = await self._build_initialization_failure_message(exc)
                 self._tainted = True
                 await self._stop_locked()
-                raise
+                raise RuntimeError(message) from exc
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         await self.start()
@@ -860,6 +955,7 @@ class MCPStdioClient:
         self._server_info = {}
         self._capabilities = {}
         self._cached_tools = None
+        self._stderr_tail.clear()
         self.protocol_version = DEFAULT_MCP_PROTOCOL_VERSION
 
         if process is None:

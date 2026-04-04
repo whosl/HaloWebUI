@@ -45,9 +45,19 @@
 		doc_url?: string;
 	}
 
+	type RuntimeCommandCapability = {
+		available: boolean;
+		message?: string | null;
+	};
+
+	type RuntimeCapabilities = {
+		commands?: Record<string, RuntimeCommandCapability>;
+	};
+
 	export let show = false;
 	export let connection: any = null;
 	export let isAdmin = false;
+	export let runtimeCapabilities: RuntimeCapabilities = { commands: {} };
 	export let onSubmit: (connection: any) => Promise<void> = async () => {};
 
 	let activeTab: 'manual' | 'presets' = 'presets';
@@ -175,6 +185,17 @@
 	];
 
 	const emptyEnvItem = (): EnvItem => ({ key: '', value: '' });
+	const getRuntimeCapabilityKey = (command?: string) =>
+		command?.trim().split(/[\\/]/).pop()?.toLowerCase() ?? '';
+	const isPresetRuntimeAvailable = (preset: MCPPreset) => {
+		const capabilityKey = getRuntimeCapabilityKey(preset.command);
+		if (!capabilityKey) return true;
+		return runtimeCapabilities?.commands?.[capabilityKey]?.available ?? true;
+	};
+	$: hostedPresets = MCP_PRESETS.filter((preset) => preset.category === 'hosted');
+	$: stdioPresets = MCP_PRESETS.filter(
+		(preset) => preset.category === 'stdio' && isPresetRuntimeAvailable(preset)
+	);
 
 	const normalizeArgs = () => argsItems.map((item) => item.trim()).filter(Boolean);
 	const normalizeEnv = () =>
@@ -682,11 +703,11 @@
 									</div>
 								</div>
 
-								<div class="text-xs text-amber-700 dark:text-amber-300 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 p-2">
-									{$i18n.t('stdio 仅管理员可用。npx 需要 Node.js；uvx 需要 Python + uv。')}
+									<div class="text-xs text-amber-700 dark:text-amber-300 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 p-2 leading-relaxed">
+										{$i18n.t('stdio 命令运行在 HaloWebUI 服务端。请确保服务端已安装对应 runtime；npx 需要 Node.js，uvx 需要 Python + uv。启动中的 stdio MCP 会额外占用内存，空闲后会自动回收。')}
+									</div>
 								</div>
-							</div>
-						{/if}
+							{/if}
 
 						<div>
 							<div class="text-xs text-gray-500 mb-1">{$i18n.t('描述（可选）')}</div>
@@ -788,18 +809,18 @@
 									</div>
 								{/if}
 							</div>
-						{:else if verifyStatus === 'error'}
-							<div class="flex items-center gap-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-lg">
-								<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 text-red-500 shrink-0">
-									<path
-										fill-rule="evenodd"
-										d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z"
-										clip-rule="evenodd"
-									/>
-								</svg>
-								<span class="text-sm text-red-700 dark:text-red-300">{verifyError || $i18n.t('Connection failed')}</span>
-							</div>
-						{/if}
+							{:else if verifyStatus === 'error'}
+								<div class="flex items-start gap-2 p-3 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-lg">
+									<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="w-4 h-4 text-red-500 shrink-0">
+										<path
+											fill-rule="evenodd"
+											d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-8-5a.75.75 0 01.75.75v4.5a.75.75 0 01-1.5 0v-4.5A.75.75 0 0110 5zm0 10a1 1 0 100-2 1 1 0 000 2z"
+											clip-rule="evenodd"
+										/>
+									</svg>
+									<span class="min-w-0 whitespace-pre-wrap break-words text-sm text-red-700 dark:text-red-300">{verifyError || $i18n.t('Connection failed')}</span>
+								</div>
+							{/if}
 					</div>
 
 					<div class="flex justify-end pt-4 text-sm font-medium">
@@ -821,7 +842,7 @@
 							{$i18n.t('HTTP 托管服务')}
 						</div>
 						<div class="space-y-2">
-							{#each MCP_PRESETS.filter((preset) => preset.category === 'hosted') as preset}
+							{#each hostedPresets as preset}
 								<button
 									type="button"
 									class="w-full text-left p-3 rounded-xl border border-gray-200 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/60 transition"
@@ -843,13 +864,13 @@
 						</div>
 					</div>
 
-					{#if isAdmin}
+					{#if isAdmin && stdioPresets.length > 0}
 						<div>
 							<div class="text-xs font-medium text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
 								{$i18n.t('stdio 本地服务')}
 							</div>
 							<div class="space-y-2">
-								{#each MCP_PRESETS.filter((preset) => preset.category === 'stdio') as preset}
+								{#each stdioPresets as preset}
 									<button
 										type="button"
 										class="w-full text-left p-3 rounded-xl border border-gray-200 dark:border-gray-800 hover:border-gray-300 dark:hover:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-900/60 transition"

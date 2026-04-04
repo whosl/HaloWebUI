@@ -39,6 +39,7 @@
 
 	let tools = {};
 	let show = false;
+	let loadingTools = false;
 
 	function toggleToolEnabled(toolId: string, enabled?: boolean) {
 		const nextEnabled = enabled ?? !tools?.[toolId]?.enabled;
@@ -70,11 +71,19 @@
 		Boolean($config?.features?.enable_native_web_search);
 
 	const init = async () => {
-		if ($_tools === null) {
-			await _tools.set(await getTools(localStorage.token));
+		if (!loadingTools) {
+			loadingTools = true;
+			try {
+				const latestTools = await getTools(localStorage.token).catch(() => null);
+				if (latestTools) {
+					_tools.set(latestTools);
+				}
+			} finally {
+				loadingTools = false;
+			}
 		}
 
-		tools = $_tools.reduce((a, tool, i, arr) => {
+		tools = ($_tools ?? []).reduce((a, tool) => {
 			a[tool.id] = {
 				name: tool.name,
 				description: tool.meta.description,

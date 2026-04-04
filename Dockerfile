@@ -98,6 +98,7 @@ RUN set -eux; \
         fi; \
     fi; \
     pip install --no-cache-dir -r "${requirements_file}"; \
+    pip install --no-cache-dir uv; \
     if [ "$PRELOAD_LOCAL_MODELS" = "true" ]; then \
         if [ "$INSTALL_PROFILE" = "local-rag" ] || [ "$INSTALL_PROFILE" = "full" ]; then \
             python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')"; \

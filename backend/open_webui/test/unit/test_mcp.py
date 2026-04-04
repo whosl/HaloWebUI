@@ -579,3 +579,187 @@ def test_mcp_server_connection_validates_transport_fields():
     )
     assert stdio_conn.transport_type == "stdio"
     assert stdio_conn.command == "python"
+
+
+def test_validate_stdio_command_uses_connection_env_path(tmp_path, monkeypatch):
+    from open_webui.utils import mcp as mcp_mod
+
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    uvx_path = bin_dir / "uvx"
+    uvx_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    uvx_path.chmod(0o755)
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+
+    resolved = mcp_mod._validate_stdio_command(
+        {"transport_type": "stdio", "command": "uvx", "env": {"PATH": str(bin_dir)}}
+    )
+
+    assert resolved == str(uvx_path)
+
+
+def test_validate_stdio_command_falls_back_to_home_local_bin(tmp_path, monkeypatch):
+    from open_webui.utils import mcp as mcp_mod
+
+    home_dir = tmp_path / "home"
+    bin_dir = home_dir / ".local" / "bin"
+    bin_dir.mkdir(parents=True)
+    uvx_path = bin_dir / "uvx"
+    uvx_path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    uvx_path.chmod(0o755)
+
+    monkeypatch.setenv("PATH", "/usr/bin:/bin")
+    monkeypatch.setenv("HOME", str(home_dir))
+
+    resolved = mcp_mod._validate_stdio_command(
+        {"transport_type": "stdio", "command": "uvx"}
+    )
+
+    assert resolved == str(uvx_path)
+
+
+def test_get_mcp_runtime_capabilities_reports_preset_commands(monkeypatch):
+    from open_webui.utils import mcp as mcp_mod
+
+    monkeypatch.setattr(
+        mcp_mod,
+        "_resolve_stdio_command",
+        lambda _connection, command: f"/resolved/{command}" if command == "uvx" else None,
+    )
+
+    capabilities = mcp_mod.get_mcp_runtime_capabilities()
+
+    assert capabilities["commands"]["uvx"]["available"] is True
+    assert capabilities["commands"]["uvx"]["message"] is None
+    assert capabilities["commands"]["npx"]["available"] is False
+    assert "Node.js" in capabilities["commands"]["npx"]["message"]
+
+
+def test_mcp_stdio_start_failure_includes_stderr(tmp_path, monkeypatch):
+    from open_webui.utils import mcp as mcp_mod
+
+    monkeypatch.setattr(
+        mcp_mod,
+        "DEFAULT_STDIO_ALLOWED_COMMANDS",
+        mcp_mod.DEFAULT_STDIO_ALLOWED_COMMANDS | {pathlib.Path(sys.executable).name.lower()},
+    )
+
+    script_path = _write_stdio_server(
+        tmp_path,
+        "stderr_exit_stdio.py",
+        """
+        import sys
+
+        sys.stderr.write("missing dependency\\n")
+        sys.stderr.flush()
+        sys.exit(1)
+        """,
+    )
+
+    async def run():
+        client = mcp_mod.MCPStdioClient(
+            {"transport_type": "stdio", "command": sys.executable, "args": [script_path]}
+        )
+        with pytest.raises(RuntimeError) as exc_info:
+            await client.start()
+
+        assert "exited before initialization" in str(exc_info.value)
+        assert "stderr:" in str(exc_info.value)
+        assert "missing dependency" in str(exc_info.value)
+
+    asyncio.run(run())
+
+
+def test_mcp_stdio_start_failure_without_stderr_reports_initialize_exit(tmp_path, monkeypatch):
+    from open_webui.utils import mcp as mcp_mod
+
+    monkeypatch.setattr(
+        mcp_mod,
+        "DEFAULT_STDIO_ALLOWED_COMMANDS",
+        mcp_mod.DEFAULT_STDIO_ALLOWED_COMMANDS | {pathlib.Path(sys.executable).name.lower()},
+    )
+
+    script_path = _write_stdio_server(
+        tmp_path,
+        "silent_exit_stdio.py",
+        """
+        raise SystemExit(1)
+        """,
+    )
+
+    async def run():
+        client = mcp_mod.MCPStdioClient(
+            {"transport_type": "stdio", "command": sys.executable, "args": [script_path]}
+        )
+        with pytest.raises(RuntimeError) as exc_info:
+            await client.start()
+
+        assert "exited before initialization" in str(exc_info.value)
+        assert "进程提前退出，未返回 MCP initialize 响应" in str(exc_info.value)
+
+    asyncio.run(run())
+
+
+def test_mcp_servers_config_get_includes_runtime_capabilities(monkeypatch):
+    from open_webui.routers import configs as configs_router
+
+    monkeypatch.setattr(
+        configs_router,
+        "get_user_mcp_server_connections",
+        lambda _request, _user: [{"transport_type": "http", "url": "http://example.com"}],
+    )
+    monkeypatch.setattr(
+        configs_router,
+        "get_mcp_runtime_capabilities",
+        lambda: {"commands": {"uvx": {"available": True, "message": None}}},
+    )
+
+    async def run():
+        return await configs_router.get_mcp_servers_config(
+            SimpleNamespace(),
+            SimpleNamespace(role="admin"),
+        )
+
+    result = asyncio.run(run())
+
+    assert result["MCP_SERVER_CONNECTIONS"][0]["url"] == "http://example.com"
+    assert result["MCP_RUNTIME_CAPABILITIES"]["commands"]["uvx"]["available"] is True
+
+
+def test_mcp_servers_config_post_includes_runtime_capabilities(monkeypatch):
+    from open_webui.routers import configs as configs_router
+
+    saved = {}
+
+    monkeypatch.setattr(
+        configs_router,
+        "set_user_mcp_server_connections",
+        lambda _user, connections: saved.setdefault("connections", connections),
+    )
+    monkeypatch.setattr(
+        configs_router,
+        "get_mcp_runtime_capabilities",
+        lambda: {"commands": {"npx": {"available": False, "message": "missing"}}},
+    )
+
+    form_data = configs_router.MCPServersConfigForm(
+        MCP_SERVER_CONNECTIONS=[
+            configs_router.MCPServerConnection(
+                transport_type="http",
+                url="http://example.com",
+            )
+        ]
+    )
+
+    async def run():
+        return await configs_router.set_mcp_servers_config(
+            SimpleNamespace(),
+            form_data,
+            user=SimpleNamespace(role="admin"),
+        )
+
+    result = asyncio.run(run())
+
+    assert saved["connections"][0]["url"] == "http://example.com"
+    assert result["MCP_RUNTIME_CAPABILITIES"]["commands"]["npx"]["available"] is False

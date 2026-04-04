@@ -190,17 +190,48 @@
 				workspace: false
 			};
 
-	// ==================== Workspace Tools 配置 ====================
-	let workspaceTools: Array<any> = [];
-	let toolsImportInputElement: HTMLInputElement;
+		// ==================== Workspace Tools 配置 ====================
+		let workspaceTools: Array<any> = [];
+		let toolsImportInputElement: HTMLInputElement;
 
-	let showValvesModal = false;
-	let selectedValvesToolId: string | null = null;
+		let showValvesModal = false;
+		let selectedValvesToolId: string | null = null;
 
-	// ==================== MCP 配置 ====================
-	let mcpServers: Array<any> = [];
-	let showMCPModal = false;
-	let editingMCPServerIndex: number | null = null;
+		// ==================== MCP 配置 ====================
+		type MCPRuntimeCommandCapability = {
+			available: boolean;
+			message?: string | null;
+		};
+
+		type MCPRuntimeCapabilities = {
+			commands: Record<string, MCPRuntimeCommandCapability>;
+		};
+
+		const buildDefaultMCPRuntimeCapabilities = (): MCPRuntimeCapabilities => ({
+			commands: {
+				npx: { available: true, message: null },
+				uvx: { available: true, message: null }
+			}
+		});
+
+		const normalizeMCPRuntimeCapabilities = (value: any): MCPRuntimeCapabilities => {
+			const defaults = buildDefaultMCPRuntimeCapabilities();
+			const commands = { ...defaults.commands };
+
+			for (const [command, capability] of Object.entries(value?.commands ?? {})) {
+				commands[command] = {
+					available: (capability as any)?.available !== false,
+					message: typeof (capability as any)?.message === 'string' ? (capability as any).message : null
+				};
+			}
+
+			return { commands };
+		};
+
+		let mcpServers: Array<any> = [];
+		let mcpRuntimeCapabilities: MCPRuntimeCapabilities = buildDefaultMCPRuntimeCapabilities();
+		let showMCPModal = false;
+		let editingMCPServerIndex: number | null = null;
 
 	const normalizeMCPServer = (server: any) => ({
 		transport_type: server?.transport_type ?? 'http',
@@ -415,6 +446,7 @@
 		});
 
 		mcpServers = (res?.MCP_SERVER_CONNECTIONS || []).map(normalizeMCPServer);
+		mcpRuntimeCapabilities = normalizeMCPRuntimeCapabilities(res?.MCP_RUNTIME_CAPABILITIES);
 	};
 
 	const addMCPServer = async (server: any) => {
@@ -457,6 +489,7 @@
 
 		if (res) {
 			mcpServers = (res?.MCP_SERVER_CONNECTIONS || []).map(normalizeMCPServer);
+			mcpRuntimeCapabilities = normalizeMCPRuntimeCapabilities(res?.MCP_RUNTIME_CAPABILITIES);
 			if (!silent) toast.success($i18n.t('MCP 服务器已保存'));
 			toolsStore.set(await getTools(localStorage.token));
 			return true;
@@ -570,6 +603,7 @@
 <MCPServerModal
 	bind:show={showMCPModal}
 	isAdmin={$user?.role === 'admin'}
+	runtimeCapabilities={mcpRuntimeCapabilities}
 	connection={editingMCPServerIndex !== null ? mcpServers[editingMCPServerIndex] : null}
 	onSubmit={async (connection) => {
 		if (editingMCPServerIndex !== null) {
