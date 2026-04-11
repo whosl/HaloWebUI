@@ -233,6 +233,7 @@ type Settings = {
 	regenerateMenu?: boolean;
 	collapseCodeBlocks?: boolean;
 	collapseHistoricalLongResponses?: boolean;
+	showMessageOutline?: boolean;
 	expandDetails?: boolean;
 	renderMarkdownInPreviews?: boolean;
 	displayMultiModelResponsesInTabs?: boolean;

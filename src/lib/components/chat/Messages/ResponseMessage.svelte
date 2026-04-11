@@ -13,6 +13,7 @@
 
 	import {
 		config,
+		mobile,
 		models,
 		settings,
 		TTSWorker,
@@ -73,10 +74,12 @@
 	import Citations from './Citations.svelte';
 	import CodeExecutions from './CodeExecutions.svelte';
 	import ContentRenderer from './ContentRenderer.svelte';
+	import MessageOutline from './MessageOutline.svelte';
 	import ThinkingIndicator from './ThinkingIndicator.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import FileItem from '$lib/components/common/FileItem.svelte';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
+	import type { HeadingItem } from '$lib/utils/headings';
 
 	interface MessageType {
 		id: string;
@@ -283,6 +286,10 @@
 	let edit = false;
 	let editedContent = '';
 	let editTextAreaElement: HTMLTextAreaElement;
+	let contentRendererRef: any = null;
+	let messageHeadings: HeadingItem[] = [];
+	$: canShowMessageOutline =
+		!edit && !$mobile && ($settings?.showMessageOutline ?? true) && messageHeadings.length >= 1;
 
 	let messageIndexEdit = false;
 
@@ -1029,88 +1036,106 @@
 							</div>
 						{:else}
 							<div
-								class="w-full flex flex-col relative {!message.done ? 'streaming-fade' : ''}"
-								id="response-content-container"
+								class="relative min-w-0 flex-1 overflow-visible message-outline-host {canShowMessageOutline
+									? 'message-outline-host-active'
+									: ''}"
 							>
-								{#if !message.done && !message.error && !hasVisibleAssistantOutput && displayStatusHistory.length > 0}
-									<!-- Show the full progress steps only before user-visible output starts -->
-									<ThinkingIndicator
-										statusHistory={displayStatusHistory}
-										messageTimestamp={message.timestamp}
-									/>
-								{/if}
-
-								{#if message.content === '' && message.done && !message.error && !(message?.files?.length > 0)}
-									<!-- Empty response: model returned 0 tokens without error -->
-									<Error
-										content={$i18n.t(
-											'Model returned an empty response. Try resending or switching models.'
-										)}
-									/>
-								{:else if message.content && message.error !== true}
-									<!-- always show message contents even if there's an error -->
-									<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
-									<ContentRenderer
-										id={message.id}
-										{history}
-										content={message.content}
-										streaming={!message.done}
-										{isLastMessage}
-										sources={message.sources}
-										floatingButtons={message?.done &&
-											!readOnly &&
-											($settings?.showFloatingActionButtons ?? true)}
-										actions={$settings?.floatingActionButtons ?? []}
-										save={!readOnly}
-										{model}
-										onTaskClick={async (e) => {
-											console.log(e);
-										}}
-										onSourceClick={async (_id, idx) => {
-											citationsRef?.openCitationByIndex?.(idx);
-										}}
-										onAddMessages={({ modelId, parentId, messages }) => {
-											addMessages({ modelId, parentId, messages });
-										}}
-										on:update={(e) => {
-											const { raw, oldContent, newContent } = e.detail;
-
-											history.messages[message.id].content = history.messages[
-												message.id
-											].content.replace(raw, raw.replace(oldContent, newContent));
-
-											updateChat();
-										}}
-										on:select={(e) => {
-											const { type, content } = e.detail;
-
-											if (type === 'explain') {
-												submitMessage(
-													message.id,
-													`Explain this section to me in more detail\n\n\`\`\`\n${content}\n\`\`\``
-												);
-											} else if (type === 'ask') {
-												const input = e.detail?.input ?? '';
-												submitMessage(message.id, `\`\`\`\n${content}\n\`\`\`\n${input}`);
-											}
+								{#if canShowMessageOutline}
+									<MessageOutline
+										headings={messageHeadings}
+										onSelect={(heading) => {
+											contentRendererRef?.scrollToHeading?.(heading.id);
 										}}
 									/>
 								{/if}
 
-								{#if message?.error}
-									<Error content={message?.error === true ? message.content : message?.error} />
-								{/if}
+								<div class="message-outline-body">
+									<div
+										class="w-full flex flex-col relative {!message.done ? 'streaming-fade' : ''}"
+										id="response-content-container"
+									>
+										{#if !message.done && !message.error && !hasVisibleAssistantOutput && displayStatusHistory.length > 0}
+											<!-- Show the full progress steps only before user-visible output starts -->
+											<ThinkingIndicator
+												statusHistory={displayStatusHistory}
+												messageTimestamp={message.timestamp}
+											/>
+										{/if}
 
-								{#if message.code_executions}
-									<CodeExecutions codeExecutions={message.code_executions} />
-								{/if}
-							</div>
-						{/if}
-					</div>
-				</div>
+										{#if message.content === '' && message.done && !message.error && !(message?.files?.length > 0)}
+											<!-- Empty response: model returned 0 tokens without error -->
+											<Error
+												content={$i18n.t(
+													'Model returned an empty response. Try resending or switching models.'
+												)}
+											/>
+										{:else if message.content && message.error !== true}
+											<!-- always show message contents even if there's an error -->
+											<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->
+											<ContentRenderer
+												bind:this={contentRendererRef}
+												bind:headings={messageHeadings}
+												id={message.id}
+												{history}
+												content={message.content}
+												streaming={!message.done}
+												{isLastMessage}
+												sources={message.sources}
+												floatingButtons={message?.done &&
+													!readOnly &&
+													($settings?.showFloatingActionButtons ?? true)}
+												actions={$settings?.floatingActionButtons ?? []}
+												save={!readOnly}
+												{model}
+												onTaskClick={async (e) => {
+													console.log(e);
+												}}
+												onSourceClick={async (_id, idx) => {
+													citationsRef?.openCitationByIndex?.(idx);
+												}}
+												onAddMessages={({ modelId, parentId, messages }) => {
+													addMessages({ modelId, parentId, messages });
+												}}
+												on:update={(e) => {
+													const { raw, oldContent, newContent } = e.detail;
 
-				{#if !edit}
-					<div class="flex items-end mt-2 gap-3 flex-wrap">
+													history.messages[message.id].content = history.messages[
+														message.id
+													].content.replace(raw, raw.replace(oldContent, newContent));
+
+													updateChat();
+												}}
+												on:select={(e) => {
+													const { type, content } = e.detail;
+
+													if (type === 'explain') {
+														submitMessage(
+															message.id,
+															`Explain this section to me in more detail\n\n\`\`\`\n${content}\n\`\`\``
+														);
+													} else if (type === 'ask') {
+														const input = e.detail?.input ?? '';
+														submitMessage(
+															message.id,
+															`\`\`\`\n${content}\n\`\`\`\n${input}`
+														);
+													}
+												}}
+											/>
+										{/if}
+
+										{#if message?.error}
+											<Error
+												content={message?.error === true ? message.content : message?.error}
+											/>
+										{/if}
+
+										{#if message.code_executions}
+											<CodeExecutions codeExecutions={message.code_executions} />
+										{/if}
+									</div>
+
+									<div class="message-outline-toolbar-row flex items-end mt-2 gap-3 flex-wrap">
 						{#if (message?.sources || message?.citations) && (model?.info?.meta?.capabilities?.citations ?? true)}
 							<div class="flex-shrink-0">
 								<Citations
@@ -1659,13 +1684,33 @@
 							{/each}
 						</div>
 					{/if}
-				{/if}
+								</div>
+							</div>
+						{/if}
+					</div>
+				</div>
 			</div>
 		</div>
 	</div>
-{/key}
+	{/key}
 
 <style>
+	.message-outline-host {
+		--message-outline-gutter: 0px;
+	}
+
+	.message-outline-host-active {
+		--message-outline-gutter: 24px;
+	}
+
+	.message-outline-body {
+		display: flex;
+		flex-direction: column;
+		min-width: 0;
+		padding-inline-start: var(--message-outline-gutter);
+		transition: padding-inline-start 140ms ease;
+	}
+
 	.buttons::-webkit-scrollbar {
 		display: none; /* for Chrome, Safari and Opera */
 	}

@@ -276,6 +276,22 @@ def _requests_json(response: requests.Response) -> dict[str, Any]:
     return response.json()
 
 
+def _raise_provider_api_error(payload: Any, provider_name: str) -> None:
+    if not isinstance(payload, dict):
+        return
+
+    code = payload.get("code")
+    if code in (None, 0, "0"):
+        return
+
+    msg = extract_error_detail(payload.get("msg")) or f"{provider_name} API returned an error."
+    trace_id = extract_error_detail(payload.get("trace_id"))
+    detail = f"{provider_name} API error {code}: {msg}"
+    if trace_id:
+        detail = f"{detail} (trace_id: {trace_id})"
+    raise RuntimeError(detail)
+
+
 def _download_text(url: str, headers: Optional[dict[str, str]] = None) -> str:
     response = requests.get(url, headers=headers or {}, timeout=120)
     response.raise_for_status()
@@ -499,20 +515,24 @@ class MinerULoader:
             timeout=60,
         )
         data = _requests_json(response)
+        _raise_provider_api_error(data, "MinerU")
         file_urls = _get_nested_value(data, ("data", "file_urls"), ("file_urls",)) or []
         if not file_urls:
             raise RuntimeError("MinerU did not return an upload URL.")
-        upload_url = file_urls[0].get("url") or file_urls[0].get("presigned_url")
+
+        first_file_url = file_urls[0]
+        if isinstance(first_file_url, str):
+            upload_url = first_file_url
+        elif isinstance(first_file_url, dict):
+            upload_url = first_file_url.get("url") or first_file_url.get("presigned_url")
+        else:
+            raise RuntimeError("MinerU returned an unsupported upload URL format.")
+
         batch_id = _get_nested_value(data, ("data", "batch_id"), ("batch_id",))
         if not upload_url or not batch_id:
             raise RuntimeError("MinerU batch creation response is incomplete.")
 
-        requests.put(
-            upload_url,
-            data=_read_bytes(self.file_path),
-            headers={"Content-Type": self.file_obj.meta.get("content_type") or "application/octet-stream"},
-            timeout=120,
-        ).raise_for_status()
+        requests.put(upload_url, data=_read_bytes(self.file_path), timeout=120).raise_for_status()
 
         poll_interval = _coerce_poll_interval(self.config, 3)
         timeout = _coerce_timeout(self.config, 180)
@@ -529,6 +549,7 @@ class MinerULoader:
                 timeout=60,
             )
             poll_data = _requests_json(poll_response)
+            _raise_provider_api_error(poll_data, "MinerU")
             results = (
                 _get_nested_value(
                     poll_data,
@@ -559,7 +580,12 @@ class MinerULoader:
                     break
                 if state in {"failed", "error"}:
                     raise RuntimeError(
-                        str(result_item.get("message") or result_item.get("error") or "MinerU parsing failed.")
+                        str(
+                            result_item.get("err_msg")
+                            or result_item.get("message")
+                            or result_item.get("error")
+                            or "MinerU parsing failed."
+                        )
                     )
 
             time.sleep(poll_interval)
@@ -613,17 +639,13 @@ class OpenMinerULoader:
             timeout=60,
         )
         data = _requests_json(response)
+        _raise_provider_api_error(data, "Open MinerU")
         file_url = _get_nested_value(data, ("data", "file_url"), ("file_url",))
         task_id = _get_nested_value(data, ("data", "task_id"), ("task_id",))
         if not file_url or not task_id:
             raise RuntimeError("Open MinerU did not return upload information.")
 
-        requests.put(
-            file_url,
-            data=_read_bytes(self.file_path),
-            headers={"Content-Type": self.file_obj.meta.get("content_type") or "application/octet-stream"},
-            timeout=120,
-        ).raise_for_status()
+        requests.put(file_url, data=_read_bytes(self.file_path), timeout=120).raise_for_status()
 
         poll_interval = _coerce_poll_interval(self.config, 3)
         timeout = _coerce_timeout(self.config, 180)
@@ -636,6 +658,7 @@ class OpenMinerULoader:
                 timeout=60,
             )
             poll_data = _requests_json(poll_response)
+            _raise_provider_api_error(poll_data, "Open MinerU")
             status = str(
                 _get_nested_value(poll_data, ("data", "status"), ("status",))
                 or ""

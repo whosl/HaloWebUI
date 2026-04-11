@@ -143,7 +143,10 @@ def _get_default_document_provider() -> str:
     legacy_engine = get_config_value("rag.CONTENT_EXTRACTION_ENGINE") or preset_env(
         "CONTENT_EXTRACTION_ENGINE", ""
     )
-    return derive_document_provider_from_legacy_engine(legacy_engine)
+    if legacy_engine:
+        return derive_document_provider_from_legacy_engine(legacy_engine)
+
+    return "mineru"
 
 
 def _get_default_document_provider_configs() -> dict:
@@ -2906,10 +2909,34 @@ TAVILY_API_KEY = PersistentConfig(
     os.getenv("TAVILY_API_KEY", ""),
 )
 
+TAVILY_SEARCH_API_BASE_URL = PersistentConfig(
+    "TAVILY_SEARCH_API_BASE_URL",
+    "rag.web.search.tavily_api_base_url",
+    os.getenv("TAVILY_SEARCH_API_BASE_URL", "https://api.tavily.com"),
+)
+
+TAVILY_SEARCH_API_FORCE_MODE = PersistentConfig(
+    "TAVILY_SEARCH_API_FORCE_MODE",
+    "rag.web.search.tavily_api_force_mode",
+    os.getenv("TAVILY_SEARCH_API_FORCE_MODE", "False").lower() == "true",
+)
+
 TAVILY_EXTRACT_DEPTH = PersistentConfig(
     "TAVILY_EXTRACT_DEPTH",
     "rag.web.search.tavily_extract_depth",
     os.getenv("TAVILY_EXTRACT_DEPTH", "basic"),
+)
+
+TAVILY_EXTRACT_API_BASE_URL = PersistentConfig(
+    "TAVILY_EXTRACT_API_BASE_URL",
+    "rag.web.loader.tavily_api_base_url",
+    os.getenv("TAVILY_EXTRACT_API_BASE_URL", "https://api.tavily.com"),
+)
+
+TAVILY_EXTRACT_API_FORCE_MODE = PersistentConfig(
+    "TAVILY_EXTRACT_API_FORCE_MODE",
+    "rag.web.loader.tavily_api_force_mode",
+    os.getenv("TAVILY_EXTRACT_API_FORCE_MODE", "False").lower() == "true",
 )
 
 PLAYWRIGHT_WS_URL = PersistentConfig(

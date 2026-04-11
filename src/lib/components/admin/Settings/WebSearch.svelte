@@ -123,6 +123,8 @@
 	let webConfig: any = null;
 	let youtubeLanguage = '';
 	let youtubeTranslation = '';
+	let tavilySearchBaseUrlInput = '';
+	let tavilyExtractBaseUrlInput = '';
 	let runtimeCapabilities = {
 		playwright_available: true,
 		firecrawl_available: true,
@@ -148,12 +150,139 @@
 		loc?: unknown;
 		msg?: unknown;
 	};
+	type TavilyEndpoint = 'search' | 'extract';
+	type TavilyUrlState = {
+		baseUrl: string;
+		forceMode: boolean;
+		previewUrl: string;
+		error: string | null;
+	};
 
 	const NUMERIC_FIELD_LABELS: Record<NumericFieldName, string> = {
 		WEB_SEARCH_RESULT_COUNT: '搜索结果数量',
 		WEB_SEARCH_CONCURRENT_REQUESTS: '并发请求数',
 		PLAYWRIGHT_TIMEOUT: 'Playwright 超时',
 		FIRECRAWL_TIMEOUT: 'Firecrawl 超时'
+	};
+	const DEFAULT_TAVILY_API_BASE_URL = 'https://api.tavily.com';
+	const TAVILY_URL_TOOLTIP =
+		'Tavily URL accepts a base URL or the matching endpoint. Add # at the end to use the exact URL without auto-appending /search or /extract.';
+	const TAVILY_FORCE_MODE_DESCRIPTION =
+		'Force mode uses the exact URL and will not auto-append /search or /extract.';
+
+	const getTavilyEndpointLabel = (endpoint: TavilyEndpoint) =>
+		endpoint === 'search' ? 'search' : 'extract';
+
+	const getUrlOriginWithAuth = (parsed: URL) => {
+		const auth = parsed.username
+			? `${parsed.username}${parsed.password ? `:${parsed.password}` : ''}@`
+			: '';
+		return `${parsed.protocol}//${auth}${parsed.host}`;
+	};
+
+	const buildTavilyPreviewUrl = (baseUrl: string, endpoint: TavilyEndpoint, forceMode = false) => {
+		const normalizedBaseUrl = (baseUrl || DEFAULT_TAVILY_API_BASE_URL).trim().replace(/\/+$/, '');
+		if (!normalizedBaseUrl) return '';
+		if (forceMode) return normalizedBaseUrl;
+
+		try {
+			const parsed = new URL(normalizedBaseUrl);
+			const path = parsed.pathname.replace(/\/+$/, '');
+			const nextPath = path ? `${path}/${endpoint}` : `/${endpoint}`;
+			return `${getUrlOriginWithAuth(parsed)}${nextPath}${parsed.search}`;
+		} catch {
+			return `${normalizedBaseUrl}/${endpoint}`;
+		}
+	};
+
+	const restoreTavilyUrlInput = (baseUrl: unknown, forceMode: unknown) => {
+		const normalizedBaseUrl =
+			typeof baseUrl === 'string' && baseUrl.trim()
+				? baseUrl.trim().replace(/\/+$/, '')
+				: DEFAULT_TAVILY_API_BASE_URL;
+
+		return forceMode ? `${normalizedBaseUrl}#` : normalizedBaseUrl;
+	};
+
+	const parseTavilyUrlInput = (input: string, endpoint: TavilyEndpoint): TavilyUrlState => {
+		const rawInput = String(input ?? '').trim();
+		const explicitForceMode = rawInput.endsWith('#');
+		const rawUrl = explicitForceMode ? rawInput.slice(0, -1).trim() : rawInput;
+		const normalizedInput = rawUrl.replace(/\/+$/, '');
+
+		if (!normalizedInput) {
+			return {
+				baseUrl: DEFAULT_TAVILY_API_BASE_URL,
+				forceMode: false,
+				previewUrl: buildTavilyPreviewUrl(DEFAULT_TAVILY_API_BASE_URL, endpoint),
+				error: null
+			};
+		}
+
+		if (!/^https?:\/\//i.test(normalizedInput)) {
+			return {
+				baseUrl: normalizedInput,
+				forceMode: explicitForceMode,
+				previewUrl: normalizedInput,
+				error: $i18n.t('Tavily {{endpoint}} URL must start with http:// or https://.', {
+					endpoint: getTavilyEndpointLabel(endpoint)
+				})
+			};
+		}
+
+		try {
+			const parsed = new URL(normalizedInput);
+			if (explicitForceMode) {
+				return {
+					baseUrl: normalizedInput,
+					forceMode: true,
+					previewUrl: normalizedInput,
+					error: null
+				};
+			}
+
+			let path = parsed.pathname.replace(/\/+$/, '');
+			const endpointSuffix = `/${endpoint}`;
+			const wrongEndpoint: TavilyEndpoint = endpoint === 'search' ? 'extract' : 'search';
+			const wrongSuffix = `/${wrongEndpoint}`;
+
+			if (path.toLowerCase().endsWith(wrongSuffix)) {
+				return {
+					baseUrl: normalizedInput,
+					forceMode: false,
+					previewUrl: normalizedInput,
+					error: $i18n.t(
+						'Tavily {{endpoint}} URL cannot end with {{wrongSuffix}}. Use a base URL or an endpoint ending with {{endpointSuffix}}.',
+						{
+							endpoint: getTavilyEndpointLabel(endpoint),
+							wrongSuffix,
+							endpointSuffix
+						}
+					)
+				};
+			}
+
+			if (path.toLowerCase().endsWith(endpointSuffix)) {
+				path = path.slice(0, -endpointSuffix.length).replace(/\/+$/, '');
+			}
+
+			const baseUrl = `${getUrlOriginWithAuth(parsed)}${path}${parsed.search}`;
+			return {
+				baseUrl,
+				forceMode: false,
+				previewUrl: buildTavilyPreviewUrl(baseUrl, endpoint),
+				error: null
+			};
+		} catch {
+			return {
+				baseUrl: normalizedInput,
+				forceMode: explicitForceMode,
+				previewUrl: normalizedInput,
+				error: $i18n.t('Tavily {{endpoint}} URL is invalid.', {
+					endpoint: getTavilyEndpointLabel(endpoint)
+				})
+			};
+		}
 	};
 
 	const parseNumericValue = (value: unknown) => {
@@ -215,6 +344,13 @@
 			webConfig[field] = payloadWeb[field];
 		}
 
+		webConfig.TAVILY_API_KEY = payloadWeb.TAVILY_API_KEY || '';
+		webConfig.TAVILY_SEARCH_API_BASE_URL =
+			payloadWeb.TAVILY_SEARCH_API_BASE_URL || DEFAULT_TAVILY_API_BASE_URL;
+		webConfig.TAVILY_SEARCH_API_FORCE_MODE = payloadWeb.TAVILY_SEARCH_API_FORCE_MODE ?? false;
+		webConfig.TAVILY_EXTRACT_API_BASE_URL =
+			payloadWeb.TAVILY_EXTRACT_API_BASE_URL || DEFAULT_TAVILY_API_BASE_URL;
+		webConfig.TAVILY_EXTRACT_API_FORCE_MODE = payloadWeb.TAVILY_EXTRACT_API_FORCE_MODE ?? false;
 		webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST = listToCsv(payloadWeb.WEB_SEARCH_DOMAIN_FILTER_LIST);
 		webConfig.YOUTUBE_LOADER_LANGUAGE = listToCsv(payloadWeb.YOUTUBE_LOADER_LANGUAGE);
 		webConfig.YOUTUBE_LOADER_TRANSLATION = payloadWeb.YOUTUBE_LOADER_TRANSLATION || '';
@@ -222,6 +358,14 @@
 			? payloadWeb.YOUTUBE_LOADER_LANGUAGE[0] ?? ''
 			: '';
 		youtubeTranslation = payloadWeb.YOUTUBE_LOADER_TRANSLATION || '';
+		tavilySearchBaseUrlInput = restoreTavilyUrlInput(
+			webConfig.TAVILY_SEARCH_API_BASE_URL,
+			webConfig.TAVILY_SEARCH_API_FORCE_MODE
+		);
+		tavilyExtractBaseUrlInput = restoreTavilyUrlInput(
+			webConfig.TAVILY_EXTRACT_API_BASE_URL,
+			webConfig.TAVILY_EXTRACT_API_FORCE_MODE
+		);
 		webConfig = webConfig;
 	};
 
@@ -277,6 +421,9 @@
 				SERPLY_API_KEY: webConfig.SERPLY_API_KEY,
 				DDGS_BACKEND: webConfig.DDGS_BACKEND,
 				TAVILY_API_KEY: webConfig.TAVILY_API_KEY,
+				TAVILY_SEARCH_API_BASE_URL: webConfig.TAVILY_SEARCH_API_BASE_URL,
+				TAVILY_SEARCH_API_FORCE_MODE: webConfig.TAVILY_SEARCH_API_FORCE_MODE,
+				TAVILY_SEARCH_API_BASE_URL_INPUT: tavilySearchBaseUrlInput,
 				SEARCHAPI_API_KEY: webConfig.SEARCHAPI_API_KEY,
 				SEARCHAPI_ENGINE: webConfig.SEARCHAPI_ENGINE,
 				SERPAPI_API_KEY: webConfig.SERPAPI_API_KEY,
@@ -309,6 +456,9 @@
 				FIRECRAWL_API_KEY: webConfig.FIRECRAWL_API_KEY,
 				FIRECRAWL_TIMEOUT: webConfig.FIRECRAWL_TIMEOUT,
 				TAVILY_EXTRACT_DEPTH: webConfig.TAVILY_EXTRACT_DEPTH,
+				TAVILY_EXTRACT_API_BASE_URL: webConfig.TAVILY_EXTRACT_API_BASE_URL,
+				TAVILY_EXTRACT_API_FORCE_MODE: webConfig.TAVILY_EXTRACT_API_FORCE_MODE,
+				TAVILY_EXTRACT_API_BASE_URL_INPUT: tavilyExtractBaseUrlInput,
 				TAVILY_API_KEY: webConfig.TAVILY_API_KEY,
 				YOUTUBE_LOADER_LANGUAGE: youtubeLanguage,
 				YOUTUBE_LOADER_PROXY_URL: webConfig.YOUTUBE_LOADER_PROXY_URL,
@@ -336,12 +486,16 @@
 	$: selectedLoaderUnavailable =
 		(webConfig?.WEB_LOADER_ENGINE === 'playwright' && !runtimeCapabilities.playwright_available) ||
 		(webConfig?.WEB_LOADER_ENGINE === 'firecrawl' && !runtimeCapabilities.firecrawl_available);
+	$: tavilySearchUrlState = parseTavilyUrlInput(tavilySearchBaseUrlInput, 'search');
+	$: tavilyExtractUrlState = parseTavilyUrlInput(tavilyExtractBaseUrlInput, 'extract');
 
 	let snapshot: ReturnType<typeof buildSnapshot> = null;
 	$: {
 		webConfig;
 		youtubeLanguage;
 		youtubeTranslation;
+		tavilySearchBaseUrlInput;
+		tavilyExtractBaseUrlInput;
 		snapshot = buildSnapshot();
 	}
 	$: dirtySections = initialSnapshot && snapshot
@@ -390,12 +544,29 @@
 				runtimeCapabilities = res?.capabilities ?? runtimeCapabilities;
 				webConfig.ENABLE_WEB_SEARCH = webConfig.ENABLE_WEB_SEARCH ?? false;
 				webConfig.ENABLE_NATIVE_WEB_SEARCH = webConfig.ENABLE_NATIVE_WEB_SEARCH ?? false;
+				webConfig.TAVILY_API_KEY = webConfig.TAVILY_API_KEY || '';
+				webConfig.TAVILY_SEARCH_API_BASE_URL =
+					webConfig.TAVILY_SEARCH_API_BASE_URL || DEFAULT_TAVILY_API_BASE_URL;
+				webConfig.TAVILY_SEARCH_API_FORCE_MODE =
+					webConfig.TAVILY_SEARCH_API_FORCE_MODE ?? false;
+				webConfig.TAVILY_EXTRACT_API_BASE_URL =
+					webConfig.TAVILY_EXTRACT_API_BASE_URL || DEFAULT_TAVILY_API_BASE_URL;
+				webConfig.TAVILY_EXTRACT_API_FORCE_MODE =
+					webConfig.TAVILY_EXTRACT_API_FORCE_MODE ?? false;
 				normalizeNumericWebConfig(webConfig);
 				webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST = listToCsv(webConfig.WEB_SEARCH_DOMAIN_FILTER_LIST);
 				webConfig.YOUTUBE_LOADER_LANGUAGE = listToCsv(webConfig.YOUTUBE_LOADER_LANGUAGE);
 				const langArray = csvToList(webConfig.YOUTUBE_LOADER_LANGUAGE);
 				youtubeLanguage = langArray.length > 0 ? langArray[0] : '';
 				youtubeTranslation = webConfig.YOUTUBE_LOADER_TRANSLATION || '';
+				tavilySearchBaseUrlInput = restoreTavilyUrlInput(
+					webConfig.TAVILY_SEARCH_API_BASE_URL,
+					webConfig.TAVILY_SEARCH_API_FORCE_MODE
+				);
+				tavilyExtractBaseUrlInput = restoreTavilyUrlInput(
+					webConfig.TAVILY_EXTRACT_API_BASE_URL,
+					webConfig.TAVILY_EXTRACT_API_FORCE_MODE
+				);
 				initialSnapshot = cloneSettingsSnapshot(buildSnapshot());
 			} else {
 				webConfig = null;
@@ -425,8 +596,29 @@
 		webConfig.YOUTUBE_LOADER_LANGUAGE = youtubeLanguage;
 		webConfig.YOUTUBE_LOADER_TRANSLATION = youtubeTranslation;
 
+		if (tavilySearchUrlState.error) {
+			toast.error(tavilySearchUrlState.error);
+			return false;
+		}
+		if (tavilyExtractUrlState.error) {
+			toast.error(tavilyExtractUrlState.error);
+			return false;
+		}
+		if (
+			(webConfig.WEB_SEARCH_ENGINE === 'tavily' || webConfig.WEB_LOADER_ENGINE === 'tavily') &&
+			!String(webConfig.TAVILY_API_KEY || '').trim()
+		) {
+			toast.error($i18n.t('Tavily API Key is required when Tavily search or loader is enabled.'));
+			return false;
+		}
+
 		// Use a copy so the UI stays as CSV strings even if the request fails.
 		const payloadWeb = normalizeNumericWebConfig({ ...webConfig }, true);
+		payloadWeb.TAVILY_API_KEY = String(payloadWeb.TAVILY_API_KEY || '').trim();
+		payloadWeb.TAVILY_SEARCH_API_BASE_URL = tavilySearchUrlState.baseUrl;
+		payloadWeb.TAVILY_SEARCH_API_FORCE_MODE = tavilySearchUrlState.forceMode;
+		payloadWeb.TAVILY_EXTRACT_API_BASE_URL = tavilyExtractUrlState.baseUrl;
+		payloadWeb.TAVILY_EXTRACT_API_FORCE_MODE = tavilyExtractUrlState.forceMode;
 		payloadWeb.WEB_SEARCH_DOMAIN_FILTER_LIST = csvToList(payloadWeb.WEB_SEARCH_DOMAIN_FILTER_LIST);
 		payloadWeb.YOUTUBE_LOADER_LANGUAGE = youtubeLanguage ? [youtubeLanguage] : [];
 
@@ -461,10 +653,17 @@
 
 	const resetSectionChanges = (section: 'webSearch' | 'loader') => {
 		if (!initialSnapshot || !webConfig) return;
-		Object.assign(webConfig, cloneSettingsSnapshot(initialSnapshot[section]));
+		const sectionSnapshot: Record<string, any> = cloneSettingsSnapshot(initialSnapshot[section]);
+		delete sectionSnapshot.TAVILY_SEARCH_API_BASE_URL_INPUT;
+		delete sectionSnapshot.TAVILY_EXTRACT_API_BASE_URL_INPUT;
+		Object.assign(webConfig, sectionSnapshot);
+		if (section === 'webSearch') {
+			tavilySearchBaseUrlInput = initialSnapshot.webSearch.TAVILY_SEARCH_API_BASE_URL_INPUT;
+		}
 		if (section === 'loader') {
 			youtubeLanguage = initialSnapshot.loader.YOUTUBE_LOADER_LANGUAGE;
 			youtubeTranslation = initialSnapshot.loader.YOUTUBE_LOADER_TRANSLATION;
+			tavilyExtractBaseUrlInput = initialSnapshot.loader.TAVILY_EXTRACT_API_BASE_URL_INPUT;
 		}
 		webConfig = webConfig;
 	};
@@ -756,12 +955,60 @@
 											/>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'tavily'}
-										<div class="space-y-1.5">
-											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Tavily API Key')}</div>
-											<SensitiveInput
-												placeholder={$i18n.t('Enter Tavily API Key')}
-												bind:value={webConfig.TAVILY_API_KEY}
-											/>
+										<div class="space-y-3">
+											<div class="space-y-1.5">
+												<div class="flex items-center gap-1 text-xs font-medium text-gray-500 dark:text-gray-400">
+													<span>{$i18n.t('Tavily Search Base URL')}</span>
+													<Tooltip content={$i18n.t(TAVILY_URL_TOOLTIP)}>
+														<svg
+															xmlns="http://www.w3.org/2000/svg"
+															viewBox="0 0 20 20"
+															fill="currentColor"
+															class="size-3.5 cursor-help text-gray-400 hover:text-gray-500"
+														>
+															<path
+																fill-rule="evenodd"
+																d="M18 10a8 8 0 11-16 0 8 8 0 0116 0ZM8.94 6.94a.75.75 0 11-1.061-1.061 3 3 0 112.871 5.026v.345a.75.75 0 01-1.5 0v-.5c0-.72.57-1.172 1.081-1.287A1.5 1.5 0 108.94 6.94ZM10 15a1 1 0 100-2 1 1 0 000 2Z"
+																clip-rule="evenodd"
+															/>
+														</svg>
+													</Tooltip>
+													{#if tavilySearchUrlState.forceMode}
+														<span class="text-amber-600 dark:text-amber-400">
+															({$i18n.t('Force mode')})
+														</span>
+													{/if}
+												</div>
+												<input
+													class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
+													type="text"
+													placeholder={$i18n.t('Enter Tavily Search Base URL')}
+													bind:value={tavilySearchBaseUrlInput}
+													autocomplete="off"
+												/>
+												<div class="text-xs text-gray-400 dark:text-gray-500">
+													<span class="text-gray-500 dark:text-gray-400">{$i18n.t('Preview')}:</span>
+													<span class="ml-1 break-all text-gray-600 dark:text-gray-300">
+														{tavilySearchUrlState.previewUrl}
+													</span>
+												</div>
+												{#if tavilySearchUrlState.error}
+													<div class="text-xs text-red-500 dark:text-red-400">
+														{tavilySearchUrlState.error}
+													</div>
+												{:else if tavilySearchUrlState.forceMode}
+													<div class="text-xs text-amber-600 dark:text-amber-400">
+														{$i18n.t(TAVILY_FORCE_MODE_DESCRIPTION)}
+													</div>
+												{/if}
+											</div>
+											<div class="space-y-1.5">
+												<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Tavily API Key')}</div>
+												<SensitiveInput
+													placeholder={$i18n.t('Enter Tavily API Key')}
+													bind:value={webConfig.TAVILY_API_KEY}
+												/>
+											</div>
 										</div>
 									{:else if webConfig.WEB_SEARCH_ENGINE === 'searchapi'}
 										<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -1151,6 +1398,52 @@
 											bind:value={webConfig.TAVILY_EXTRACT_DEPTH}
 											autocomplete="off"
 										/>
+									</div>
+									<div class="glass-item p-4 space-y-1.5">
+										<div class="flex items-center gap-1 text-xs font-medium text-gray-500 dark:text-gray-400">
+											<span>{$i18n.t('Tavily Extract Base URL')}</span>
+											<Tooltip content={$i18n.t(TAVILY_URL_TOOLTIP)}>
+												<svg
+													xmlns="http://www.w3.org/2000/svg"
+													viewBox="0 0 20 20"
+													fill="currentColor"
+													class="size-3.5 cursor-help text-gray-400 hover:text-gray-500"
+												>
+													<path
+														fill-rule="evenodd"
+														d="M18 10a8 8 0 11-16 0 8 8 0 0116 0ZM8.94 6.94a.75.75 0 11-1.061-1.061 3 3 0 112.871 5.026v.345a.75.75 0 01-1.5 0v-.5c0-.72.57-1.172 1.081-1.287A1.5 1.5 0 108.94 6.94ZM10 15a1 1 0 100-2 1 1 0 000 2Z"
+														clip-rule="evenodd"
+													/>
+												</svg>
+											</Tooltip>
+											{#if tavilyExtractUrlState.forceMode}
+												<span class="text-amber-600 dark:text-amber-400">
+													({$i18n.t('Force mode')})
+												</span>
+											{/if}
+										</div>
+										<input
+											class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input"
+											type="text"
+											placeholder={$i18n.t('Enter Tavily Extract Base URL')}
+											bind:value={tavilyExtractBaseUrlInput}
+											autocomplete="off"
+										/>
+										<div class="text-xs text-gray-400 dark:text-gray-500">
+											<span class="text-gray-500 dark:text-gray-400">{$i18n.t('Preview')}:</span>
+											<span class="ml-1 break-all text-gray-600 dark:text-gray-300">
+												{tavilyExtractUrlState.previewUrl}
+											</span>
+										</div>
+										{#if tavilyExtractUrlState.error}
+											<div class="text-xs text-red-500 dark:text-red-400">
+												{tavilyExtractUrlState.error}
+											</div>
+										{:else if tavilyExtractUrlState.forceMode}
+											<div class="text-xs text-amber-600 dark:text-amber-400">
+												{$i18n.t(TAVILY_FORCE_MODE_DESCRIPTION)}
+											</div>
+										{/if}
 									</div>
 									{#if webConfig.WEB_SEARCH_ENGINE !== 'tavily'}
 										<div

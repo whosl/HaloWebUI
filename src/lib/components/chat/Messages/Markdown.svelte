@@ -13,6 +13,7 @@
 	import markedExtension from '$lib/utils/marked/extension';
 	import markedKatexExtension from '$lib/utils/marked/katex-extension';
 	import citationExtension from '$lib/utils/marked/citation-extension';
+	import { extractHeadings, type HeadingItem } from '$lib/utils/headings';
 
 	import MarkdownTokens from './Markdown/MarkdownTokens.svelte';
 	import { createSmoothStreamContentController } from './streaming/smoothStreamContent';
@@ -27,6 +28,7 @@
 	export let transitionMode: ChatTransitionMode = DEFAULT_CHAT_TRANSITION_MODE;
 
 	export let sourceIds = [];
+	export let headings: HeadingItem[] = [];
 
 	export let onSourceClick: Function = () => {};
 	export let onTaskClick: Function = () => {};
@@ -159,6 +161,8 @@
 			tokens = nextLexedContent ? marked.lexer(nextLexedContent) : [];
 		}
 	}
+
+	$: headings = tokens.length > 0 ? extractHeadings(tokens, id) : [];
 
 	onDestroy(() => {
 		if (delayedAnimatedTimer) {

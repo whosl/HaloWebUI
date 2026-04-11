@@ -191,6 +191,133 @@
 		}
 	};
 
+	type DocumentProviderId = keyof typeof defaultDocumentProviderConfigs;
+	type ExpertEngineId = '' | 'tika' | 'docling' | 'document_intelligence' | 'mistral_ocr';
+
+	const documentProviderMeta: Record<
+		DocumentProviderId,
+		{
+			label: string;
+			description: string;
+			requirement: string;
+			limits: string;
+			officialUrl?: string;
+			officialLabel?: string;
+			apiKeyUrl?: string;
+			apiKeyLabel?: string;
+		}
+	> = {
+		local_default: {
+			label: '内置解析',
+			description: '使用 HaloWebUI 内置解析链路处理常见文本与文档格式；适合不依赖第三方文档服务商的场景。',
+			requirement: '无需 API Key，可直接使用。',
+			limits: '复杂扫描件、版面还原或高质量 OCR 场景建议切换下方的文档处理服务商。'
+		},
+		mineru: {
+			label: 'MinerU',
+			description: '标准文档处理服务商，适合正式接入复杂 PDF、Office 文档与扫描版内容。',
+			requirement: '需要配置 MinerU 访问 Token；未配置时无法保存并使用该服务商。',
+			limits: '能力更完整，适合正式使用；官方文档当前给出的限制明显高于 Open MinerU。',
+			officialUrl: 'https://mineru.net/doc/docs/',
+			officialLabel: '查看 MinerU 文档',
+			apiKeyUrl: 'https://mineru.net/apiManage/token',
+			apiKeyLabel: '申请 MinerU Token'
+		},
+		open_mineru: {
+			label: 'Open MinerU',
+			description: '免 Token 的轻量文档处理入口，适合快速试用与小文件场景。',
+			requirement: '无需 API Key，直接使用公开接口。',
+			limits: 'IP 限频；官方当前文档限制为单文件 <= 10MB、<= 20 页。',
+			officialUrl: 'https://mineru.net/doc/docs/',
+			officialLabel: '查看 Open MinerU 限制说明'
+		},
+		doc2x: {
+			label: 'Doc2x',
+			description: '第三方文档解析服务，适合对接 Doc2x 官方或兼容服务端点。',
+			requirement: '需要 API Key。',
+			limits: '能力与配额取决于 Doc2x 服务商配置。',
+			officialUrl: 'https://doc2x.noedgeai.com/',
+			officialLabel: '查看 Doc2x 官网',
+			apiKeyUrl: 'https://open.noedgeai.com/apiKeys',
+			apiKeyLabel: '获取 Doc2x API Key'
+		},
+		paddleocr: {
+			label: 'PaddleOCR',
+			description: '对接自建或第三方 PaddleOCR 服务，适合已有 OCR 服务基础设施的场景。',
+			requirement: '需要可用的 PaddleOCR 服务地址。',
+			limits: '具体能力与并发限制取决于你接入的 PaddleOCR 服务。',
+			officialUrl: 'https://aistudio.baidu.com/paddleocr/',
+			officialLabel: '查看 PaddleOCR 官网'
+		},
+		mistral: {
+			label: 'Mistral OCR',
+			description: '使用 Mistral OCR API 处理 PDF 与图片内容。',
+			requirement: '需要 Mistral API Key。',
+			limits: '更适合 OCR 场景，不建议作为通用文档服务商理解。',
+			officialUrl: 'https://mistral.ai/',
+			officialLabel: '查看 Mistral 官网',
+			apiKeyUrl: 'https://console.mistral.ai/api-keys/',
+			apiKeyLabel: '获取 Mistral API Key'
+		},
+		azure_document_intelligence: {
+			label: 'Azure Document Intelligence',
+			description: '',
+			requirement: '',
+			limits: ''
+		}
+	};
+
+	const expertEngineMeta: Record<
+		ExpertEngineId,
+		{
+			label: string;
+			description: string;
+		}
+	> = {
+		'': {
+			label: '关闭（使用内置解析）',
+			description: '仅使用 HaloWebUI 内置解析链路；不额外接入远程解析服务。'
+		},
+		tika: {
+			label: 'Tika 服务',
+			description: '通过远程 Tika 服务补充更多文档格式解析能力。'
+		},
+		docling: {
+			label: 'Docling 服务',
+			description: '通过远程 Docling 服务增强复杂文档解析能力。'
+		},
+		document_intelligence: {
+			label: 'Azure Document Intelligence',
+			description: '接入 Azure Document Intelligence 进行企业级文档解析。'
+		},
+		mistral_ocr: {
+			label: 'Mistral OCR 兼容接口',
+			description: '在内置解析链路上额外挂接 Mistral OCR 兼容接口。'
+		}
+	};
+
+	const documentProviderOptions = (Object.keys(defaultDocumentProviderConfigs) as DocumentProviderId[]).filter(
+		(provider) => provider !== 'azure_document_intelligence'
+	).map((provider) => ({
+		value: provider,
+		label: documentProviderMeta[provider].label
+	}));
+
+	const expertEngineOptions = (Object.keys(expertEngineMeta) as ExpertEngineId[]).map((engine) => ({
+		value: engine,
+		label: expertEngineMeta[engine].label
+	}));
+
+	const getDocumentProviderMeta = (provider: string) =>
+		documentProviderMeta[(provider as DocumentProviderId) || 'local_default'] ??
+		documentProviderMeta.local_default;
+
+	const getExpertEngineMeta = (engine: string) =>
+		expertEngineMeta[(engine as ExpertEngineId) || ''] ?? expertEngineMeta[''];
+
+	$: selectedDocumentProviderMeta = getDocumentProviderMeta(RAGConfig?.DOCUMENT_PROVIDER);
+	$: selectedExpertEngineMeta = getExpertEngineMeta(RAGConfig?.CONTENT_EXTRACTION_ENGINE);
+
 	const mergeProviderConfigs = (value: any = {}) => {
 		const merged = structuredClone(defaultDocumentProviderConfigs);
 		for (const [provider, config] of Object.entries(value ?? {})) {
@@ -202,13 +329,13 @@
 	const normalizeDocumentsSettings = (value: any) => ({
 		...value,
 		FILE_PROCESSING_DEFAULT_MODE: value?.FILE_PROCESSING_DEFAULT_MODE ?? 'retrieval',
-		DOCUMENT_PROVIDER: value?.DOCUMENT_PROVIDER ?? 'local_default',
+		DOCUMENT_PROVIDER: value?.DOCUMENT_PROVIDER ?? 'mineru',
 		DOCUMENT_PROVIDER_CONFIGS: mergeProviderConfigs(value?.DOCUMENT_PROVIDER_CONFIGS)
 	});
 
 	let RAGConfig: any = {
 		FILE_PROCESSING_DEFAULT_MODE: 'retrieval',
-		DOCUMENT_PROVIDER: 'local_default',
+		DOCUMENT_PROVIDER: 'mineru',
 		DOCUMENT_PROVIDER_CONFIGS: mergeProviderConfigs(),
 		CONTENT_EXTRACTION_ENGINE: '',
 		PDF_EXTRACT_IMAGES: false,
@@ -487,28 +614,24 @@
 	};
 
 	const submitHandler = async () => {
-		const providerConfig = RAGConfig.DOCUMENT_PROVIDER_CONFIGS?.[RAGConfig.DOCUMENT_PROVIDER] ?? {};
-		if (RAGConfig.DOCUMENT_PROVIDER === 'mineru' && providerConfig.api_key === '') {
-			toast.error('MinerU API Key required.');
+		const usingExpertEngine = RAGConfig.DOCUMENT_PROVIDER === 'local_default';
+		const selectedProviderConfig =
+			RAGConfig.DOCUMENT_PROVIDER_CONFIGS?.[RAGConfig.DOCUMENT_PROVIDER] ?? {};
+
+		if (
+			RAGConfig.DOCUMENT_PROVIDER === 'mineru' &&
+			String(selectedProviderConfig.api_key ?? '').trim() === ''
+		) {
+			toast.error('MinerU Token required.');
 			return;
 		}
-		if (RAGConfig.DOCUMENT_PROVIDER === 'doc2x' && providerConfig.api_key === '') {
-			toast.error('Doc2x API Key required.');
-			return;
-		}
-		if (RAGConfig.DOCUMENT_PROVIDER === 'paddleocr' && providerConfig.server_url === '') {
-			toast.error('PaddleOCR Server URL required.');
-			return;
-		}
-		if (RAGConfig.DOCUMENT_PROVIDER === 'mistral' && providerConfig.api_key === '') {
-			toast.error('Mistral OCR API Key required.');
-			return;
-		}
-		if (RAGConfig.CONTENT_EXTRACTION_ENGINE === 'tika' && RAGConfig.TIKA_SERVER_URL === '') {
+
+		if (usingExpertEngine && RAGConfig.CONTENT_EXTRACTION_ENGINE === 'tika' && RAGConfig.TIKA_SERVER_URL === '') {
 			toast.error($i18n.t('Tika Server URL required.'));
 			return;
 		}
 		if (
+			usingExpertEngine &&
 			RAGConfig.CONTENT_EXTRACTION_ENGINE === 'docling' &&
 			RAGConfig.DOCLING_SERVER_URL === ''
 		) {
@@ -517,6 +640,7 @@
 		}
 
 		if (
+			usingExpertEngine &&
 			RAGConfig.CONTENT_EXTRACTION_ENGINE === 'document_intelligence' &&
 			(RAGConfig.DOCUMENT_INTELLIGENCE_ENDPOINT === '' ||
 				RAGConfig.DOCUMENT_INTELLIGENCE_KEY === '')
@@ -525,6 +649,7 @@
 			return;
 		}
 		if (
+			usingExpertEngine &&
 			RAGConfig.CONTENT_EXTRACTION_ENGINE === 'mistral_ocr' &&
 			RAGConfig.MISTRAL_OCR_API_KEY === ''
 		) {
@@ -776,183 +901,232 @@
 							</div>
 						</div>
 
-						<div class="glass-item p-5">
-							<div class="mb-3 flex items-center justify-between gap-4">
-								<div class="text-sm font-medium">文档处理服务商</div>
-								<HaloSelect
-									bind:value={RAGConfig.DOCUMENT_PROVIDER}
-									options={[
-										{ value: 'local_default', label: '本地默认' },
-										{ value: 'mineru', label: 'MinerU' },
-										{ value: 'open_mineru', label: 'Open MinerU' },
-										{ value: 'doc2x', label: 'Doc2x' },
-										{ value: 'paddleocr', label: 'PaddleOCR' },
-										{ value: 'mistral', label: 'Mistral' }
-									]}
-									className="w-fit"
-								/>
-							</div>
-
-							{#if RAGConfig.DOCUMENT_PROVIDER === 'mineru'}
-								<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-									<div>
-										<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Base URL</div>
-										<input
-											class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
-											bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mineru.api_base_url}
-										/>
-									</div>
-									<div>
-										<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Key</div>
-										<SensitiveInput
-											placeholder="MinerU API Key"
-											bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mineru.api_key}
-										/>
-									</div>
-									<div>
-										<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">Token</div>
-										<input
-											class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
-											placeholder="可留空，默认使用用户 ID"
-											bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mineru.token}
-										/>
-									</div>
-									<div>
-										<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">Model Version</div>
-										<HaloSelect
-											bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mineru.model_version}
-											options={[
-												{ value: 'vlm', label: 'VLM' },
-												{ value: 'pipeline', label: 'Pipeline' }
-											]}
-											className="w-full"
-										/>
-									</div>
-								</div>
-							{:else if RAGConfig.DOCUMENT_PROVIDER === 'open_mineru'}
-								<div>
-									<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Base URL</div>
-									<input
-										class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
-										bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.open_mineru.api_base_url}
-									/>
-								</div>
-							{:else if RAGConfig.DOCUMENT_PROVIDER === 'doc2x'}
-								<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
-									<div>
-										<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Base URL</div>
-										<input
-											class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
-											bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.doc2x.api_base_url}
-										/>
-									</div>
-									<div>
-										<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Key</div>
-										<SensitiveInput
-											placeholder="Doc2x API Key"
-											bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.doc2x.api_key}
-										/>
-									</div>
-								</div>
-							{:else if RAGConfig.DOCUMENT_PROVIDER === 'paddleocr'}
-								<div>
-									<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">Server URL</div>
-									<input
-										class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
-										placeholder="http://localhost:8080/ocr"
-										bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.paddleocr.server_url}
-									/>
-								</div>
-							{:else if RAGConfig.DOCUMENT_PROVIDER === 'mistral'}
-								<div>
-									<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Key</div>
-									<SensitiveInput
-										placeholder="Mistral API Key"
-										bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mistral.api_key}
-									/>
-								</div>
-							{:else}
-								<div class="text-xs text-gray-500 dark:text-gray-400">
-									当前使用内置本地解析链路。下面的“高级自建解析”可继续切换为 Tika、Docling 或 Azure Document Intelligence。
-								</div>
-							{/if}
-						</div>
-
-						<div class="glass-item p-5">
-							<div class="mb-3 flex items-center justify-between gap-4">
-								<div class="text-sm font-medium">高级自建解析</div>
-								<HaloSelect
-									bind:value={RAGConfig.CONTENT_EXTRACTION_ENGINE}
-									options={[
-										{ value: '', label: '本地默认解析' },
-										{ value: 'tika', label: 'Tika' },
-										{ value: 'docling', label: 'Docling' },
-										{ value: 'document_intelligence', label: 'Azure Document Intelligence' },
-										{ value: 'mistral_ocr', label: 'Mistral OCR (兼容)' }
-									]}
-									className="w-fit"
-								/>
-							</div>
-
-							{#if RAGConfig.CONTENT_EXTRACTION_ENGINE === ''}
-								<div class="flex items-center justify-between gap-4">
-									<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('PDF Extract Images (OCR)')}</div>
-									<Switch bind:state={RAGConfig.PDF_EXTRACT_IMAGES} />
-								</div>
-								<div class="mt-2">
-									<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('PDF Loading Mode')}</div>
+							<div class="glass-item p-5">
+								<div class="mb-3 flex items-center justify-between gap-4">
+									<div class="text-sm font-medium">文档处理服务商</div>
 									<HaloSelect
-										bind:value={RAGConfig.PDF_LOADING_MODE}
-										options={[
-											{ value: '', label: $i18n.t('Page (Default)') },
-											{ value: 'single', label: $i18n.t('Single Document') }
-										]}
-										className="w-full"
+										bind:value={RAGConfig.DOCUMENT_PROVIDER}
+										options={documentProviderOptions}
+										className="w-fit"
 									/>
 								</div>
-							{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'tika'}
-								<div class="mt-2">
-									<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Tika Server URL')}</div>
-									<input
-										class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
-										placeholder={$i18n.t('Enter Tika Server URL')}
-										bind:value={RAGConfig.TIKA_SERVER_URL}
-									/>
+								<div class="text-xs text-gray-500 dark:text-gray-400">
+									{selectedDocumentProviderMeta.description}
 								</div>
-							{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'docling'}
-								<div class="mt-2">
-									<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Docling Server URL')}</div>
-									<input
-										class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
-										placeholder={$i18n.t('Enter Docling Server URL')}
-										bind:value={RAGConfig.DOCLING_SERVER_URL}
-									/>
-								</div>
-							{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'document_intelligence'}
-								<div class="mt-2 space-y-3">
-									<div>
-										<input
-											class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
-											placeholder="Azure Document Intelligence Endpoint"
-											bind:value={RAGConfig.DOCUMENT_INTELLIGENCE_ENDPOINT}
-										/>
+								<div class="mt-3 grid grid-cols-1 gap-3 md:grid-cols-2">
+									<div class="rounded-2xl border border-gray-200/70 bg-white/60 px-4 py-3 dark:border-gray-700/70 dark:bg-gray-900/40">
+										<div class="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+											接入要求
+										</div>
+										<div class="mt-1 text-sm text-gray-700 dark:text-gray-200">
+											{selectedDocumentProviderMeta.requirement}
+										</div>
 									</div>
-									<div>
-										<SensitiveInput
-											placeholder="Azure Document Intelligence Key"
-											bind:value={RAGConfig.DOCUMENT_INTELLIGENCE_KEY}
-										/>
+									<div class="rounded-2xl border border-gray-200/70 bg-white/60 px-4 py-3 dark:border-gray-700/70 dark:bg-gray-900/40">
+										<div class="text-[11px] font-medium uppercase tracking-wide text-gray-400 dark:text-gray-500">
+											能力与限制
+										</div>
+										<div class="mt-1 text-sm text-gray-700 dark:text-gray-200">
+											{selectedDocumentProviderMeta.limits}
+										</div>
 									</div>
 								</div>
-							{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'mistral_ocr'}
-								<div class="mt-2">
-									<SensitiveInput
-										placeholder="Mistral API Key"
-										bind:value={RAGConfig.MISTRAL_OCR_API_KEY}
-									/>
+								{#if selectedDocumentProviderMeta.officialUrl || selectedDocumentProviderMeta.apiKeyUrl}
+									<div class="mt-3 flex flex-wrap gap-4 text-xs">
+										{#if selectedDocumentProviderMeta.officialUrl}
+											<a
+												class="text-sky-600 hover:underline dark:text-sky-400"
+												href={selectedDocumentProviderMeta.officialUrl}
+												target="_blank"
+												rel="noreferrer"
+											>
+												{selectedDocumentProviderMeta.officialLabel ?? '查看官方文档'}
+											</a>
+										{/if}
+										{#if selectedDocumentProviderMeta.apiKeyUrl}
+											<a
+												class="text-sky-600 hover:underline dark:text-sky-400"
+												href={selectedDocumentProviderMeta.apiKeyUrl}
+												target="_blank"
+												rel="noreferrer"
+											>
+												{selectedDocumentProviderMeta.apiKeyLabel ?? '获取 API Key'}
+											</a>
+										{/if}
+									</div>
+								{/if}
+
+								<div class="mt-4">
+									{#if RAGConfig.DOCUMENT_PROVIDER === 'mineru'}
+										<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+											<div>
+												<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Base URL</div>
+												<input
+													class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
+													bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mineru.api_base_url}
+												/>
+											</div>
+										<div>
+											<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">访问 Token（必填）</div>
+											<SensitiveInput
+												placeholder="填写 MinerU Token"
+												bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mineru.api_key}
+											/>
+										</div>
+											<div>
+												<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">Model Version</div>
+												<HaloSelect
+													bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mineru.model_version}
+													options={[
+														{ value: 'vlm', label: 'VLM' },
+														{ value: 'pipeline', label: 'Pipeline' }
+													]}
+													className="w-full"
+												/>
+											</div>
+										</div>
+										<details class="mt-3 rounded-2xl border border-dashed border-gray-200/80 px-4 py-3 dark:border-gray-700/80">
+											<summary class="cursor-pointer text-xs font-medium text-gray-500 dark:text-gray-400">
+												高级选项
+											</summary>
+											<div class="mt-3">
+												<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">请求标识（可选）</div>
+												<input
+													class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
+													placeholder="可留空，默认使用用户 ID"
+													bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mineru.token}
+												/>
+											</div>
+										</details>
+										{#if String(RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mineru.api_key ?? '').trim() === ''}
+											<div class="mt-3 text-xs text-amber-600 dark:text-amber-400">
+												当前选择的是 MinerU。保存前必须先填写访问 Token，否则上传文档时会直接失败。
+											</div>
+										{/if}
+									{:else if RAGConfig.DOCUMENT_PROVIDER === 'open_mineru'}
+										<div>
+											<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Base URL</div>
+											<input
+												class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
+												bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.open_mineru.api_base_url}
+											/>
+										</div>
+									{:else if RAGConfig.DOCUMENT_PROVIDER === 'doc2x'}
+										<div class="grid grid-cols-1 gap-3 md:grid-cols-2">
+											<div>
+												<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Base URL</div>
+												<input
+													class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
+													bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.doc2x.api_base_url}
+												/>
+											</div>
+											<div>
+												<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Key</div>
+												<SensitiveInput
+													placeholder="Doc2x API Key"
+													bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.doc2x.api_key}
+												/>
+											</div>
+										</div>
+									{:else if RAGConfig.DOCUMENT_PROVIDER === 'paddleocr'}
+										<div>
+											<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">Server URL</div>
+											<input
+												class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
+												placeholder="http://localhost:8080/ocr"
+												bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.paddleocr.server_url}
+											/>
+										</div>
+									{:else if RAGConfig.DOCUMENT_PROVIDER === 'mistral'}
+										<div>
+											<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">API Key</div>
+											<SensitiveInput
+												placeholder="Mistral API Key"
+												bind:value={RAGConfig.DOCUMENT_PROVIDER_CONFIGS.mistral.api_key}
+											/>
+										</div>
+									{:else}
+										<div class="rounded-2xl border border-gray-200/70 bg-white/60 px-4 py-3 text-xs text-gray-500 dark:border-gray-700/70 dark:bg-gray-900/40 dark:text-gray-400">
+											当前使用的是内置解析链路。若需要对接 Tika、Docling、Azure 或 Mistral OCR 兼容接口，请使用下方的“专家解析设置”。
+										</div>
+									{/if}
+								</div>
+							</div>
+
+							{#if RAGConfig.DOCUMENT_PROVIDER === 'local_default'}
+								<div class="glass-item p-5">
+									<div class="mb-3 flex items-center justify-between gap-4">
+										<div class="text-sm font-medium">专家解析设置</div>
+										<HaloSelect
+											bind:value={RAGConfig.CONTENT_EXTRACTION_ENGINE}
+											options={expertEngineOptions}
+											className="w-fit"
+										/>
+									</div>
+									<div class="text-xs text-gray-500 dark:text-gray-400">
+										{selectedExpertEngineMeta.description}
+									</div>
+
+									{#if RAGConfig.CONTENT_EXTRACTION_ENGINE === ''}
+										<div class="mt-3 flex items-center justify-between gap-4">
+											<div class="text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('PDF Extract Images (OCR)')}</div>
+											<Switch bind:state={RAGConfig.PDF_EXTRACT_IMAGES} />
+										</div>
+										<div class="mt-2">
+											<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('PDF Loading Mode')}</div>
+											<HaloSelect
+												bind:value={RAGConfig.PDF_LOADING_MODE}
+												options={[
+													{ value: '', label: $i18n.t('Page (Default)') },
+													{ value: 'single', label: $i18n.t('Single Document') }
+												]}
+												className="w-full"
+											/>
+										</div>
+									{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'tika'}
+										<div class="mt-3">
+											<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Tika Server URL')}</div>
+											<input
+												class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
+												placeholder={$i18n.t('Enter Tika Server URL')}
+												bind:value={RAGConfig.TIKA_SERVER_URL}
+											/>
+										</div>
+									{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'docling'}
+										<div class="mt-3">
+											<div class="mb-1.5 text-xs font-medium text-gray-500 dark:text-gray-400">{$i18n.t('Docling Server URL')}</div>
+											<input
+												class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
+												placeholder={$i18n.t('Enter Docling Server URL')}
+												bind:value={RAGConfig.DOCLING_SERVER_URL}
+											/>
+										</div>
+									{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'document_intelligence'}
+										<div class="mt-3 space-y-3">
+											<div>
+												<input
+													class="glass-input w-full px-3 py-2 text-sm dark:text-gray-300"
+													placeholder="Azure Document Intelligence Endpoint"
+													bind:value={RAGConfig.DOCUMENT_INTELLIGENCE_ENDPOINT}
+												/>
+											</div>
+											<div>
+												<SensitiveInput
+													placeholder="Azure Document Intelligence Key"
+													bind:value={RAGConfig.DOCUMENT_INTELLIGENCE_KEY}
+												/>
+											</div>
+										</div>
+									{:else if RAGConfig.CONTENT_EXTRACTION_ENGINE === 'mistral_ocr'}
+										<div class="mt-3">
+											<SensitiveInput
+												placeholder="Mistral API Key"
+												bind:value={RAGConfig.MISTRAL_OCR_API_KEY}
+											/>
+										</div>
+									{/if}
 								</div>
 							{/if}
-						</div>
 
 						<div class="glass-item p-5">
 							<div class="mb-3 flex items-center justify-between gap-4">

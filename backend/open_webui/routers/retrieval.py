@@ -7,7 +7,7 @@ import shutil
 import uuid
 from datetime import datetime
 from pathlib import Path
-from typing import Iterator, List, Optional, Sequence, Union
+from typing import Iterator, List, Literal, Optional, Sequence, Union
 from urllib.parse import urlparse
 
 from fastapi import (
@@ -54,7 +54,7 @@ from open_webui.retrieval.web.searxng import search_searxng
 from open_webui.retrieval.web.serper import search_serper
 from open_webui.retrieval.web.serply import search_serply
 from open_webui.retrieval.web.serpstack import search_serpstack
-from open_webui.retrieval.web.tavily import search_tavily
+from open_webui.retrieval.web.tavily import normalize_tavily_api_base_url, search_tavily
 from open_webui.retrieval.web.bing import search_bing
 from open_webui.retrieval.web.exa import search_exa
 from open_webui.retrieval.web.perplexity import search_perplexity
@@ -118,6 +118,25 @@ log.setLevel(SRC_LOG_LEVELS["RAG"])
 
 
 router = APIRouter()
+
+
+def _normalize_tavily_config_url(
+    url: Optional[str],
+    endpoint: Literal["search", "extract"],
+    *,
+    force_mode: bool = False,
+) -> tuple[str, bool]:
+    try:
+        return normalize_tavily_api_base_url(
+            url,
+            endpoint,
+            force_mode=force_mode,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(exc),
+        ) from exc
 
 
 def _log_text_content_summary(
@@ -399,6 +418,8 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
             "SERPER_API_KEY": request.app.state.config.SERPER_API_KEY,
             "SERPLY_API_KEY": request.app.state.config.SERPLY_API_KEY,
             "TAVILY_API_KEY": request.app.state.config.TAVILY_API_KEY,
+            "TAVILY_SEARCH_API_BASE_URL": request.app.state.config.TAVILY_SEARCH_API_BASE_URL,
+            "TAVILY_SEARCH_API_FORCE_MODE": request.app.state.config.TAVILY_SEARCH_API_FORCE_MODE,
             "SEARCHAPI_API_KEY": request.app.state.config.SEARCHAPI_API_KEY,
             "SEARCHAPI_ENGINE": request.app.state.config.SEARCHAPI_ENGINE,
             "SERPAPI_API_KEY": request.app.state.config.SERPAPI_API_KEY,
@@ -421,6 +442,8 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
             "FIRECRAWL_API_KEY": request.app.state.config.FIRECRAWL_API_KEY,
             "FIRECRAWL_API_BASE_URL": request.app.state.config.FIRECRAWL_API_BASE_URL,
             "TAVILY_EXTRACT_DEPTH": request.app.state.config.TAVILY_EXTRACT_DEPTH,
+            "TAVILY_EXTRACT_API_BASE_URL": request.app.state.config.TAVILY_EXTRACT_API_BASE_URL,
+            "TAVILY_EXTRACT_API_FORCE_MODE": request.app.state.config.TAVILY_EXTRACT_API_FORCE_MODE,
             "YOUTUBE_LOADER_LANGUAGE": request.app.state.config.YOUTUBE_LOADER_LANGUAGE,
             "YOUTUBE_LOADER_PROXY_URL": request.app.state.config.YOUTUBE_LOADER_PROXY_URL,
             "YOUTUBE_LOADER_TRANSLATION": request.app.state.YOUTUBE_LOADER_TRANSLATION,
@@ -452,6 +475,8 @@ class WebConfig(BaseModel):
     SERPER_API_KEY: Optional[str] = None
     SERPLY_API_KEY: Optional[str] = None
     TAVILY_API_KEY: Optional[str] = None
+    TAVILY_SEARCH_API_BASE_URL: Optional[str] = None
+    TAVILY_SEARCH_API_FORCE_MODE: Optional[bool] = None
     SEARCHAPI_API_KEY: Optional[str] = None
     SEARCHAPI_ENGINE: Optional[str] = None
     SERPAPI_API_KEY: Optional[str] = None
@@ -474,6 +499,8 @@ class WebConfig(BaseModel):
     FIRECRAWL_API_KEY: Optional[str] = None
     FIRECRAWL_API_BASE_URL: Optional[str] = None
     TAVILY_EXTRACT_DEPTH: Optional[str] = None
+    TAVILY_EXTRACT_API_BASE_URL: Optional[str] = None
+    TAVILY_EXTRACT_API_FORCE_MODE: Optional[bool] = None
     YOUTUBE_LOADER_LANGUAGE: Optional[List[str]] = None
     YOUTUBE_LOADER_PROXY_URL: Optional[str] = None
     YOUTUBE_LOADER_TRANSLATION: Optional[str] = None
@@ -694,6 +721,55 @@ async def update_rag_config(
     )
 
     if form_data.web is not None:
+        tavily_search_api_base_url, tavily_search_api_force_mode = _normalize_tavily_config_url(
+            form_data.web.TAVILY_SEARCH_API_BASE_URL
+            if form_data.web.TAVILY_SEARCH_API_BASE_URL is not None
+            else request.app.state.config.TAVILY_SEARCH_API_BASE_URL,
+            "search",
+            force_mode=(
+                form_data.web.TAVILY_SEARCH_API_FORCE_MODE
+                if form_data.web.TAVILY_SEARCH_API_FORCE_MODE is not None
+                else request.app.state.config.TAVILY_SEARCH_API_FORCE_MODE
+            ),
+        )
+        tavily_extract_api_base_url, tavily_extract_api_force_mode = _normalize_tavily_config_url(
+            form_data.web.TAVILY_EXTRACT_API_BASE_URL
+            if form_data.web.TAVILY_EXTRACT_API_BASE_URL is not None
+            else request.app.state.config.TAVILY_EXTRACT_API_BASE_URL,
+            "extract",
+            force_mode=(
+                form_data.web.TAVILY_EXTRACT_API_FORCE_MODE
+                if form_data.web.TAVILY_EXTRACT_API_FORCE_MODE is not None
+                else request.app.state.config.TAVILY_EXTRACT_API_FORCE_MODE
+            ),
+        )
+        tavily_api_key = str(
+            (
+                form_data.web.TAVILY_API_KEY
+                if form_data.web.TAVILY_API_KEY is not None
+                else request.app.state.config.TAVILY_API_KEY
+            )
+            or ""
+        ).strip()
+        effective_web_search_engine = (
+            form_data.web.WEB_SEARCH_ENGINE
+            if form_data.web.WEB_SEARCH_ENGINE is not None
+            else request.app.state.config.WEB_SEARCH_ENGINE
+        )
+        effective_web_loader_engine = (
+            form_data.web.WEB_LOADER_ENGINE
+            if form_data.web.WEB_LOADER_ENGINE is not None
+            else request.app.state.config.WEB_LOADER_ENGINE
+        )
+        if (
+            effective_web_search_engine == "tavily"
+            or effective_web_loader_engine == "tavily"
+        ) and not tavily_api_key:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Tavily API Key is required when Tavily search or loader is enabled.",
+            )
+
         # Web search settings
         request.app.state.config.ENABLE_WEB_SEARCH = form_data.web.ENABLE_WEB_SEARCH
         request.app.state.config.ENABLE_NATIVE_WEB_SEARCH = (
@@ -734,7 +810,11 @@ async def update_rag_config(
         request.app.state.config.SERPSTACK_HTTPS = form_data.web.SERPSTACK_HTTPS
         request.app.state.config.SERPER_API_KEY = form_data.web.SERPER_API_KEY
         request.app.state.config.SERPLY_API_KEY = form_data.web.SERPLY_API_KEY
-        request.app.state.config.TAVILY_API_KEY = form_data.web.TAVILY_API_KEY
+        request.app.state.config.TAVILY_API_KEY = tavily_api_key
+        request.app.state.config.TAVILY_SEARCH_API_BASE_URL = tavily_search_api_base_url
+        request.app.state.config.TAVILY_SEARCH_API_FORCE_MODE = (
+            tavily_search_api_force_mode
+        )
         request.app.state.config.SEARCHAPI_API_KEY = form_data.web.SEARCHAPI_API_KEY
         request.app.state.config.SEARCHAPI_ENGINE = form_data.web.SEARCHAPI_ENGINE
         request.app.state.config.SERPAPI_API_KEY = form_data.web.SERPAPI_API_KEY
@@ -768,6 +848,12 @@ async def update_rag_config(
         )
         request.app.state.config.TAVILY_EXTRACT_DEPTH = (
             form_data.web.TAVILY_EXTRACT_DEPTH
+        )
+        request.app.state.config.TAVILY_EXTRACT_API_BASE_URL = (
+            tavily_extract_api_base_url
+        )
+        request.app.state.config.TAVILY_EXTRACT_API_FORCE_MODE = (
+            tavily_extract_api_force_mode
         )
         request.app.state.config.YOUTUBE_LOADER_LANGUAGE = (
             form_data.web.YOUTUBE_LOADER_LANGUAGE
@@ -847,6 +933,8 @@ async def update_rag_config(
             "SERPER_API_KEY": request.app.state.config.SERPER_API_KEY,
             "SERPLY_API_KEY": request.app.state.config.SERPLY_API_KEY,
             "TAVILY_API_KEY": request.app.state.config.TAVILY_API_KEY,
+            "TAVILY_SEARCH_API_BASE_URL": request.app.state.config.TAVILY_SEARCH_API_BASE_URL,
+            "TAVILY_SEARCH_API_FORCE_MODE": request.app.state.config.TAVILY_SEARCH_API_FORCE_MODE,
             "SEARCHAPI_API_KEY": request.app.state.config.SEARCHAPI_API_KEY,
             "SEARCHAPI_ENGINE": request.app.state.config.SEARCHAPI_ENGINE,
             "SERPAPI_API_KEY": request.app.state.config.SERPAPI_API_KEY,
@@ -869,6 +957,8 @@ async def update_rag_config(
             "FIRECRAWL_API_KEY": request.app.state.config.FIRECRAWL_API_KEY,
             "FIRECRAWL_API_BASE_URL": request.app.state.config.FIRECRAWL_API_BASE_URL,
             "TAVILY_EXTRACT_DEPTH": request.app.state.config.TAVILY_EXTRACT_DEPTH,
+            "TAVILY_EXTRACT_API_BASE_URL": request.app.state.config.TAVILY_EXTRACT_API_BASE_URL,
+            "TAVILY_EXTRACT_API_FORCE_MODE": request.app.state.config.TAVILY_EXTRACT_API_FORCE_MODE,
             "YOUTUBE_LOADER_LANGUAGE": request.app.state.config.YOUTUBE_LOADER_LANGUAGE,
             "YOUTUBE_LOADER_PROXY_URL": request.app.state.config.YOUTUBE_LOADER_PROXY_URL,
             "YOUTUBE_LOADER_TRANSLATION": request.app.state.YOUTUBE_LOADER_TRANSLATION,
@@ -1802,6 +1892,8 @@ def search_web(request: Request, engine: str, query: str) -> list[SearchResult]:
                 query,
                 request.app.state.config.WEB_SEARCH_RESULT_COUNT,
                 request.app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST,
+                api_base_url=request.app.state.config.TAVILY_SEARCH_API_BASE_URL,
+                force_mode=request.app.state.config.TAVILY_SEARCH_API_FORCE_MODE,
             )
         else:
             raise Exception("No TAVILY_API_KEY found in environment variables")

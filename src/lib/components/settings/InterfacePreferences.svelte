@@ -119,6 +119,7 @@
 	let textScale: number | null = null;
 	let collapseCodeBlocks = false;
 	let collapseHistoricalLongResponses = true;
+	let showMessageOutline = true;
 	let expandDetails = false;
 
 	// Chat behavior
@@ -238,6 +239,7 @@
 			temporaryChatByDefault: boolean;
 			collapseCodeBlocks: boolean;
 			collapseHistoricalLongResponses: boolean;
+			showMessageOutline: boolean;
 			expandDetails: boolean;
 			insertSuggestionPrompt: boolean;
 			keepFollowUpPrompts: boolean;
@@ -560,6 +562,7 @@
 			temporaryChatByDefault,
 			collapseCodeBlocks,
 			collapseHistoricalLongResponses,
+			showMessageOutline,
 			expandDetails,
 			insertSuggestionPrompt,
 			keepFollowUpPrompts,
@@ -637,6 +640,7 @@
 		temporaryChatByDefault = snapshot.temporaryChatByDefault;
 		collapseCodeBlocks = snapshot.collapseCodeBlocks;
 		collapseHistoricalLongResponses = snapshot.collapseHistoricalLongResponses;
+		showMessageOutline = snapshot.showMessageOutline;
 		expandDetails = snapshot.expandDetails;
 		insertSuggestionPrompt = snapshot.insertSuggestionPrompt;
 		keepFollowUpPrompts = snapshot.keepFollowUpPrompts;
@@ -705,6 +709,7 @@
 		enableAutoScrollOnStreaming;
 		collapseCodeBlocks;
 		collapseHistoricalLongResponses;
+		showMessageOutline;
 		expandDetails;
 		insertSuggestionPrompt;
 		keepFollowUpPrompts;
@@ -1000,6 +1005,7 @@
 				temporaryChatByDefault,
 				collapseCodeBlocks,
 				collapseHistoricalLongResponses,
+				showMessageOutline,
 				expandDetails,
 				insertSuggestionPrompt,
 				keepFollowUpPrompts,
@@ -1184,6 +1190,7 @@
 
 		collapseCodeBlocks = $settings?.collapseCodeBlocks ?? false;
 		collapseHistoricalLongResponses = $settings?.collapseHistoricalLongResponses ?? true;
+		showMessageOutline = $settings?.showMessageOutline ?? true;
 		expandDetails = $settings?.expandDetails ?? false;
 
 		landingPageMode = $settings?.landingPageMode ?? '';
@@ -2126,6 +2133,14 @@
 											</div>
 											<Switch
 												bind:state={collapseHistoricalLongResponses}
+											/>
+										</div>
+										<div class="flex items-center justify-between glass-item px-4 py-3">
+											<div class="text-sm font-medium">
+												{$i18n.t('Show Message Outline')}
+											</div>
+											<Switch
+												bind:state={showMessageOutline}
 											/>
 										</div>
 										<div class="flex items-center justify-between glass-item px-4 py-3">

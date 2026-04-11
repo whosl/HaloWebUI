@@ -23,6 +23,7 @@
 	import Source from './Source.svelte';
 	import { settings } from '$lib/stores';
 	import { isSvgMarkup, promoteSvgMarkupTokens } from './svgMarkupTokens';
+	import { getHeadingAnchorId } from '$lib/utils/headings';
 
 	const dispatch = createEventDispatcher();
 
@@ -37,6 +38,7 @@
 	export let onTaskClick: Function = () => {};
 	export let onSourceClick: Function = () => {};
 	export let charAnimation = false;
+	export let pathPrefix: number[] = [];
 
 	const headerComponent = (depth: number) => {
 		return 'h' + depth;
@@ -45,36 +47,18 @@
 	const exportTableToCSVHandler = (token, tokenIdx = 0) => {
 		console.log('Exporting table to CSV');
 
-		// Extract header row text and escape for CSV.
 		const header = token.header.map((headerCell) => `"${headerCell.text.replace(/"/g, '""')}"`);
-
-		// Create an array for rows that will hold the mapped cell text.
 		const rows = token.rows.map((row) =>
 			row.map((cell) => {
-				// Map tokens into a single text
 				const cellContent = cell.tokens.map((token) => token.text).join('');
-				// Escape double quotes and wrap the content in double quotes
 				return `"${cellContent.replace(/"/g, '""')}"`;
 			})
 		);
 
-		// Combine header and rows
 		const csvData = [header, ...rows];
-
-		// Join the rows using commas (,) as the separator and rows using newline (\n).
 		const csvContent = csvData.map((row) => row.join(',')).join('\n');
-
-		// Log rows and CSV content to ensure everything is correct.
-		console.log(csvData);
-		console.log(csvContent);
-
-		// To handle Unicode characters, you need to prefix the data with a BOM:
-		const bom = '\uFEFF'; // BOM for UTF-8
-
-		// Create a new Blob prefixed with the BOM to ensure proper Unicode encoding.
+		const bom = '\uFEFF';
 		const blob = new Blob([bom + csvContent], { type: 'text/csv;charset=UTF-8' });
-
-		// Use FileSaver.js's saveAs function to save the generated CSV file.
 		saveAs(blob, `table-${id}-${tokenIdx}.csv`);
 	};
 
@@ -94,7 +78,6 @@
 				while (j < tokens.length) {
 					const next = tokens[j] as any;
 					if (next.type === 'space') {
-						// Skip space tokens if followed by another tool_calls
 						if (
 							j + 1 < tokens.length &&
 							(tokens[j + 1] as any).type === 'details' &&
@@ -141,7 +124,12 @@
 		{#if token.type === 'hr'}
 			<hr class=" border-gray-100 dark:border-gray-850" />
 		{:else if token.type === 'heading'}
-			<svelte:element this={headerComponent(token.depth)} dir="auto">
+			<svelte:element
+				this={headerComponent(token.depth)}
+				dir="auto"
+				id={getHeadingAnchorId(messageId, [...pathPrefix, tokenIdx])}
+				class="message-outline-anchor"
+			>
 				<MarkdownInlineTokens
 					id={`${id}-${tokenIdx}-h`}
 					tokens={token.tokens}
@@ -150,30 +138,35 @@
 				/>
 			</svelte:element>
 		{:else if token.type === 'code'}
-			{#if token.raw.includes('```')}
-				<CodeBlock
-					id={`${id}-${tokenIdx}`}
-					{messageId}
-					collapsed={$settings?.collapseCodeBlocks ?? false}
-					{token}
-					lang={token?.lang ?? ''}
-					code={token?.text ?? ''}
-					{attributes}
-					{save}
-					onCode={(value) => {
-						dispatch('code', value);
-					}}
-					onSave={(value) => {
-						dispatch('update', {
-							raw: token.raw,
-							oldContent: token.text,
-							newContent: value
-						});
-					}}
-				/>
-			{:else}
-				{token.text}
-			{/if}
+			<div
+				id={getHeadingAnchorId(messageId, [...pathPrefix, tokenIdx])}
+				class="message-outline-anchor"
+			>
+				{#if token.raw.includes('```')}
+					<CodeBlock
+						id={`${id}-${tokenIdx}`}
+						{messageId}
+						collapsed={$settings?.collapseCodeBlocks ?? false}
+						{token}
+						lang={token?.lang ?? ''}
+						code={token?.text ?? ''}
+						{attributes}
+						{save}
+						onCode={(value) => {
+							dispatch('code', value);
+						}}
+						onSave={(value) => {
+							dispatch('update', {
+								raw: token.raw,
+								oldContent: token.text,
+								newContent: value
+							});
+						}}
+					/>
+				{:else}
+					{token.text}
+				{/if}
+			</div>
 		{:else if token.type === 'table'}
 			<div class="relative w-full group">
 				<div class="scrollbar-hidden relative overflow-x-auto max-w-full rounded-lg">
@@ -250,6 +243,7 @@
 						id={`${id}-${tokenIdx}`}
 						{messageId}
 						tokens={token.tokens}
+						pathPrefix={[...pathPrefix, tokenIdx]}
 						{charAnimation}
 						{onTaskClick}
 						{onSourceClick}
@@ -283,6 +277,7 @@
 								id={`${id}-${tokenIdx}-${itemIdx}`}
 								{messageId}
 								tokens={item.tokens}
+								pathPrefix={[...pathPrefix, tokenIdx, itemIdx]}
 								top={token.loose}
 								{charAnimation}
 								{onTaskClick}
@@ -317,6 +312,7 @@
 								id={`${id}-${tokenIdx}-${itemIdx}`}
 								{messageId}
 								tokens={item.tokens}
+								pathPrefix={[...pathPrefix, tokenIdx, itemIdx]}
 								top={token.loose}
 								{charAnimation}
 								{onTaskClick}
@@ -341,6 +337,7 @@
 						id={`${id}-${tokenIdx}-d`}
 						{messageId}
 						tokens={marked.lexer(token.text)}
+						pathPrefix={[...pathPrefix, tokenIdx]}
 						attributes={token?.attributes}
 						{charAnimation}
 						{onTaskClick}
