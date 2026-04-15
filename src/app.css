@@ -469,6 +469,24 @@ textarea::placeholder {
 	@apply prose dark:prose-invert prose-blockquote:border-s-gray-100 prose-blockquote:dark:border-gray-800 prose-blockquote:border-s-2 prose-blockquote:not-italic prose-blockquote:font-normal prose-headings:font-semibold prose-hr:my-4 prose-hr:border-gray-100 prose-hr:dark:border-gray-800 prose-p:my-0 prose-img:my-1 prose-headings:my-1 prose-pre:my-0 prose-table:my-0 prose-blockquote:my-0 prose-ul:-my-0 prose-ol:-my-0 prose-li:-my-0 whitespace-pre-line;
 }
 
+.markdown-prose
+	:where(h1):not(:where([class~='not-prose'], [class~='not-prose'] *)) {
+	font-size: 1.5625rem;
+	line-height: 1.25;
+}
+
+.markdown-prose
+	:where(h2):not(:where([class~='not-prose'], [class~='not-prose'] *)) {
+	font-size: 1.375rem;
+	line-height: 1.35;
+}
+
+.markdown-prose
+	:where(h3):not(:where([class~='not-prose'], [class~='not-prose'] *)) {
+	font-size: 1.125rem;
+	line-height: 1.45;
+}
+
 .dark .markdown-prose {
 	color: #f0f0f0;
 }
