@@ -1773,6 +1773,7 @@
 	"Theme": "主题",
 	"Thinking intensity": "思考强度",
 	"Thinking...": "正在思考...",
+	"Request sent": "请求已发送",
 	"This action cannot be undone. Do you wish to continue?": "此操作无法撤销。是否确认继续？",
 	"This channel was created on {{createdAt}}. This is the very beginning of the {{channelName}} channel.": "此频道创建于{{createdAt}}，这里是{{channelName}}频道的开始",
 	"This chat won’t appear in history and your messages will not be saved.": "此聊天不会出现在历史记录中，且您的消息不会被保存。",
