@@ -344,7 +344,6 @@
 	let scrollObserver: IntersectionObserver;
 	let userHasScrolled = false;
 	let isAutoScrolling = false;
-	let isPreparingChatView = false;
 	let _scrollResetRafId: number | null = null;
 	let _overviewFocusRafId: number | null = null;
 	let overviewPinnedMessageId: string | null = null;
@@ -405,6 +404,8 @@
 	let pendingComposerStateSave: Promise<void> = Promise.resolve();
 	let hasPersistedComposerState = false;
 	let composerStateSyncReady = false;
+	let lastRequestedChatIdProp = '';
+	let activeChatLoadToken = 0;
 
 	// J-3-01: O(1) model lookup map — rebuilt reactively when $models changes
 	let modelsMap: Map<string, Model> = new Map();
@@ -1678,10 +1679,16 @@
 		}
 	}
 
-	$: if (chatIdProp) {
+	$: if (!chatIdProp) {
+		lastRequestedChatIdProp = '';
+	} else if (lastRequestedChatIdProp !== chatIdProp) {
+		lastRequestedChatIdProp = chatIdProp;
+		const targetChatId = chatIdProp;
+		const loadToken = ++activeChatLoadToken;
+
 		(async () => {
 			loading = true;
-			isPreparingChatView = true;
+			cancelPendingAutoScrollFrames();
 			composerStateSyncReady = false;
 			resetReasoningSelectionTracking();
 			webSearchSelectionSyncReady = false;
@@ -1700,33 +1707,37 @@
 			reasoningEffort = null;
 			maxThinkingTokens = null;
 
-			if (chatIdProp && (await loadChat())) {
-				loading = false;
-				await tick();
-				if (!hasPersistedComposerState) {
-					restoreChatSessionState(chatIdProp);
-				}
+			const loaded = await loadChat(targetChatId);
 
-				const input = readChatInputState(chatIdProp);
-				if (input) {
-					try {
-						prompt = input.prompt;
-						files = input.files;
-					} catch (e) {}
-				}
-
-				scrollToBottom();
-				await nextAnimationFrame();
-				await nextAnimationFrame();
-				isPreparingChatView = false;
-				const chatInput = document.getElementById('chat-input');
-				chatInput?.focus();
-				composerStateSyncReady = true;
-				webSearchSelectionSyncReady = true;
-				initializeReasoningSelectionTracking();
-			} else {
-				await goto('/');
+			if (loadToken !== activeChatLoadToken || targetChatId !== chatIdProp) {
+				return;
 			}
+
+			if (!loaded) {
+				await goto('/');
+				return;
+			}
+
+			if (!hasPersistedComposerState) {
+				restoreChatSessionState(targetChatId);
+			}
+
+			const input = readChatInputState(targetChatId);
+			if (input) {
+				try {
+					prompt = input.prompt;
+					files = input.files;
+				} catch (e) {}
+			}
+
+			loading = false;
+			await tick();
+			scrollToBottomImmediately();
+			const chatInput = document.getElementById('chat-input');
+			chatInput?.focus();
+			composerStateSyncReady = true;
+			webSearchSelectionSyncReady = true;
+			initializeReasoningSelectionTracking();
 		})();
 	}
 
@@ -2761,20 +2772,17 @@
 		}
 	}
 
-	const loadChat = async () => {
-		const navigationId = chatIdProp;
-		chatId.set(chatIdProp);
+	const loadChat = async (targetChatId: string = chatIdProp) => {
+		const navigationId = targetChatId;
+		chatId.set(targetChatId);
 		tags = [];
 		taskIds = null;
-		const chatContextPromise = getChatContextById(localStorage.token, chatIdProp).catch(() => ({
+		const chatContextPromise = getChatContextById(localStorage.token, targetChatId).catch(() => ({
 			tags: [],
 			task_ids: []
 		}));
 
-		chat = await getChatById(localStorage.token, $chatId).catch(async (error) => {
-			await goto('/');
-			return null;
-		});
+		chat = await getChatById(localStorage.token, targetChatId).catch(() => null);
 
 		if (navigationId !== chatIdProp) return null;
 
@@ -3179,10 +3187,32 @@
 	};
 
 	let _scrollRafId: number | null = null;
-	const nextAnimationFrame = () =>
-		new Promise<number>((resolve) => {
-			requestAnimationFrame(resolve);
-		});
+	const cancelPendingAutoScrollFrames = () => {
+		if (_scrollRafId !== null) {
+			cancelAnimationFrame(_scrollRafId);
+			_scrollRafId = null;
+		}
+
+		if (_scrollResetRafId !== null) {
+			cancelAnimationFrame(_scrollResetRafId);
+			_scrollResetRafId = null;
+		}
+
+		isAutoScrolling = false;
+	};
+
+	const scrollToBottomImmediately = () => {
+		if (!messagesContainerElement) {
+			return;
+		}
+
+		cancelPendingAutoScrollFrames();
+		resetAutoScrollLock();
+		userHasScrolled = false;
+		autoScroll = true;
+		messagesContainerElement.scrollTop = messagesContainerElement.scrollHeight;
+		scheduleOverviewFocusedMessageSync();
+	};
 
 	const scrollToBottom = async (behavior: ScrollBehavior = 'auto') => {
 		if (_scrollRafId !== null) return;
@@ -4770,17 +4800,14 @@
 					{initNewChat}
 				/>
 
-				<div
-					class="flex flex-col flex-auto z-10 w-full min-w-0 @container"
-					class:invisible={isPreparingChatView}
-				>
+				<div class="flex flex-col flex-auto z-10 w-full min-w-0 @container">
 					{#if ($settings?.landingPageMode === 'chat' && !$selectedAssistantScene) || hasMessages}
 						<div
 							class=" pb-2.5 flex flex-col justify-between w-full flex-auto overflow-auto h-0 max-w-full z-10 scrollbar-hidden"
 							id="messages-container"
 							bind:this={messagesContainerElement}
-							on:wheel={handleMessageOutlineWheel}
-							on:touchmove={handleMessageOutlineTouchMove}
+							on:wheel|passive={handleMessageOutlineWheel}
+							on:touchmove|passive={handleMessageOutlineTouchMove}
 							on:pointerdown={handleMessageOutlinePointerDown}
 							on:scroll={handleMessagesScroll}
 						>
