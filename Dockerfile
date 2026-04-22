@@ -115,6 +115,7 @@ RUN set -eux; \
     apt-get install -y --no-install-recommends \
         curl \
         ca-certificates \
+        tzdata \
         ${build_apt_packages} \
         ${extra_apt_packages}; \
     install -d /usr/share/postgresql-common/pgdg; \
