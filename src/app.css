@@ -1256,6 +1256,53 @@ input[type='range']::-moz-range-thumb {
 }
 
 /* =========================================
+   IMAGE WORKSPACE STYLES
+   ========================================= */
+/* 标签页按钮 */
+.tab-button {
+	@apply flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium
+	       transition-all duration-150
+	       text-gray-600 dark:text-gray-400
+	       hover:text-gray-900 dark:hover:text-gray-100
+	       hover:bg-gray-100/50 dark:hover:bg-gray-800/50;
+}
+
+.tab-button.active {
+	@apply bg-white dark:bg-gray-800 text-gray-900 dark:text-white shadow-sm;
+}
+
+/* 风格预设卡片 */
+.style-preset-card {
+	@apply flex flex-col items-center justify-center gap-2 p-3
+	       rounded-xl border border-gray-200/60 bg-white/85
+	       dark:border-gray-700/50 dark:bg-gray-900/70
+	       transition-all duration-150
+	       hover:border-gray-300 dark:hover:border-gray-600
+	       hover:shadow-sm hover:scale-[1.02]
+	       active:scale-[0.98];
+}
+
+.style-preset-card.active {
+	@apply border-blue-400 dark:border-blue-500
+	       bg-blue-50/50 dark:bg-blue-900/20;
+}
+
+/* 参数分组标题 */
+.param-group-title {
+	@apply text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3;
+}
+
+/* 参数标签 */
+.param-label {
+	@apply text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5;
+}
+
+/* 参数提示 */
+.param-hint {
+	@apply text-xs text-gray-500 dark:text-gray-400 mt-1;
+}
+
+/* =========================================
    STREAMING ANIMATION
    ========================================= */
 /* 逐字渐隐动画（复刻 LobeHub stream-char） */
