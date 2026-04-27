@@ -85,3 +85,15 @@ def test_naked_duplicate_model_id_is_rejected_when_connection_is_not_unique():
             cfgs={"0": {}, "1": {"prefix_id": "7ad57b3e"}},
             request_models=[official, relay],
         )
+
+
+def test_naked_model_id_with_multiple_enabled_connections_is_rejected_even_without_keys():
+    with pytest.raises(HTTPException):
+        resolve_provider_connection_by_model_id(
+            provider="openai",
+            model_id="gpt-image-2",
+            base_urls=["https://first.example/v1", "https://second.example/v1"],
+            keys=["", ""],
+            cfgs={"0": {"enable": True}, "1": {"enable": True}},
+            request_models=[],
+        )

@@ -695,10 +695,34 @@
 		await tick();
 	};
 
+	const formatImageGenerationError = (error: unknown) => {
+		if (typeof error === 'string' && error.trim()) {
+			return error;
+		}
+
+		if (error && typeof error === 'object') {
+			if ('detail' in error) {
+				const detail = error.detail;
+				if (typeof detail === 'string' && detail.trim()) {
+					return detail;
+				}
+				if (detail && typeof detail === 'object' && 'message' in detail && typeof detail.message === 'string') {
+					return detail.message;
+				}
+			}
+
+			if ('message' in error && typeof error.message === 'string' && error.message.trim()) {
+				return error.message;
+			}
+		}
+
+		return `${error}`;
+	};
+
 	const generateImage = async (message: MessageType) => {
 		generatingImage = true;
 		const res = await imageGenerations(localStorage.token, message.content).catch((error) => {
-			toast.error(`${error}`);
+			toast.error(formatImageGenerationError(error));
 		});
 		console.log(res);
 

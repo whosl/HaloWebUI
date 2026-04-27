@@ -76,11 +76,7 @@ export const getConfig = async (token: string = '') => {
 		.then(parseJsonResponse)
 		.catch((err) => {
 			console.log(err);
-			if ('detail' in err) {
-				error = err.detail;
-			} else {
-				error = 'Server connection failed';
-			}
+			error = err;
 			return null;
 		});
 

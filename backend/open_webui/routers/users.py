@@ -31,7 +31,10 @@ from open_webui.utils.auth import (
     get_verified_user,
     invalidate_cached_user,
 )
-from open_webui.utils.user_connections import maybe_migrate_user_connections
+from open_webui.utils.user_connections import (
+    maybe_migrate_user_connections,
+    normalize_connections_payload,
+)
 from open_webui.utils.user_tools import maybe_migrate_user_tool_settings
 from open_webui.utils.access_control import get_permissions
 
@@ -290,6 +293,15 @@ async def update_user_settings_by_session_user(
     patch_payload = form_data.model_dump(exclude={"revision"}, exclude_none=True)
     if not patch_payload:
         return existing_user.settings or UserSettings()
+
+    patch_ui = _as_dict(patch_payload.get("ui"))
+    if "connections" in patch_ui:
+        patch_ui["connections"] = normalize_connections_payload(
+            _as_dict(patch_ui.get("connections")),
+            existing_connections=_get_ui_connections(existing_settings_dict),
+            id_strategy="generated",
+        )
+        patch_payload["ui"] = patch_ui
 
     replace_paths = {("ui", "connections")}
     next_settings_dict = _deep_merge_dict(

@@ -218,9 +218,11 @@ async def generate_chat_completion(
         model_info = Models.get_model_by_id(model.get("id"))
         if model_info and model_info.user_id and model_info.user_id != user.id:
             from open_webui.models.users import Users  # local import to avoid heavy coupling
+            from open_webui.utils.user_connections import maybe_migrate_user_connections
 
             owner = Users.get_user_by_id(model_info.user_id)
             if owner:
+                owner = maybe_migrate_user_connections(request, owner)
                 request.state.connection_user = owner
     except Exception:
         pass

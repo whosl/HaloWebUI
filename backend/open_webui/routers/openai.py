@@ -37,7 +37,6 @@ from open_webui.models.users import UserModel
 from open_webui.storage.provider import Storage
 from open_webui.utils.user_connections import (
     get_user_connections,
-    set_user_connection_provider_config,
 )
 
 from open_webui.constants import ERROR_MESSAGES
@@ -70,6 +69,7 @@ from open_webui.utils.native_web_search import (
 )
 from open_webui.utils.model_identity import (
     decorate_provider_model_identity,
+    derive_connection_id,
     get_base_model_ref_from_model_info,
     get_model_ref_from_model,
     resolve_model_from_lookup,
@@ -1583,8 +1583,8 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
 
     num_urls = len(base_urls)
 
-    # If multiple OpenAI-compatible connections exist, ensure every connection has a stable internal prefix_id.
-    # This avoids id collisions and prevents UI crashes due to duplicate keyed list items.
+    # If multiple OpenAI-compatible connections exist, derive a stable internal prefix_id in memory.
+    # Read paths must stay read-only so model discovery does not mutate user settings revisions.
     cfgs = cfgs or {}
     cfgs_changed = False
     if num_urls > 1:
@@ -1622,8 +1622,13 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                 if preserved_empty_idx == idx:
                     prefix_id = ""
                 else:
-                    prefix_id = secrets.token_hex(4)
-                    cfgs_changed = True
+                    prefix_id = derive_connection_id(
+                        provider="openai",
+                        source="personal",
+                        url=url,
+                        api_key=keys[idx] if idx < len(keys) else "",
+                        auth_type=api_config.get("auth_type"),
+                    )
 
             if prefix_id:
                 if prefix_id in used:
@@ -1653,22 +1658,6 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
             if cfgs.get(key) != next_cfg:
                 cfgs_changed = True
             cfgs[key] = next_cfg
-
-    # Persist prefix_id/name normalization when needed (keeps model ids stable across sessions).
-    if cfgs_changed and user:
-        try:
-            set_user_connection_provider_config(
-                user.id,
-                "openai",
-                {
-                    "OPENAI_API_BASE_URLS": base_urls,
-                    "OPENAI_API_KEYS": keys,
-                    "OPENAI_API_CONFIGS": cfgs,
-                },
-            )
-        except Exception:
-            # Best-effort persistence; do not block model listing.
-            pass
 
     request_tasks = []
     for idx, url in enumerate(base_urls):

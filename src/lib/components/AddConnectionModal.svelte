@@ -1169,6 +1169,9 @@
 			try {
 				await onSubmit(connection);
 			} catch (error) {
+				if (error && typeof error === 'object' && (error as { __toastShown?: boolean }).__toastShown) {
+					return;
+				}
 				const rawMessage =
 					error instanceof Error
 						? error.message

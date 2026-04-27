@@ -298,10 +298,12 @@ async def get_all_models(request, user: UserModel = None):
     async def _owner_base_models_by_user_id(user_id: str) -> list[dict]:
         try:
             from open_webui.models.users import Users  # local import to avoid heavy coupling
+            from open_webui.utils.user_connections import maybe_migrate_user_connections
 
             owner = Users.get_user_by_id(user_id)
             if not owner:
                 return []
+            owner = maybe_migrate_user_connections(request, owner)
             return await get_all_base_models(request, user=owner)
         except Exception:
             return []

@@ -19,6 +19,7 @@
 	export let options: Option[] = [];
 	export let disabled: boolean = false;
 	export let placeholder: string = '';
+	export let triggerId: string = '';
 	export let className: string = '';
 	export let contentClassName: string = '';
 	export let searchEnabled: boolean = false;
@@ -159,6 +160,7 @@
 >
 	<Select.Trigger
 		bind:this={triggerEl}
+		id={triggerId || undefined}
 		class="inline-flex items-center justify-between gap-2 rounded-lg
 					border border-gray-200 dark:border-gray-700
 					bg-gray-50 dark:bg-gray-850

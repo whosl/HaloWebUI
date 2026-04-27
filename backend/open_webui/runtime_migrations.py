@@ -33,7 +33,9 @@ HALO_BACKUP_DIR = Path(
     )
 ).resolve()
 HALO_STATE_TABLE = "halowebui_migration_state"
+HALO_DATA_MIGRATION_TABLE = "halowebui_data_migrations"
 HALO_TARGET_HEAD = "3d4e5f6a7b8c"
+HALO_CONNECTION_METADATA_BACKFILL_KEY = "connection_metadata_backfill_v1"
 HALO_SOURCE_FAMILIES = {
     "c440947495f3": "owui_070_family",
     "a1b2c3d4e5f6": "owui_080_family",
@@ -114,6 +116,8 @@ def ensure_runtime_migrated() -> Optional[DetectionResult]:
     with _locked_connection() as (_engine, conn, url):
         detection = _detect_database(conn, url)
         if detection.family in {"fresh", "already_halo"}:
+            _run_post_halo_data_migrations(conn)
+            conn.commit()
             os.environ["HALO_RUNTIME_MIGRATION_DONE"] = "true"
             return detection
 
@@ -164,6 +168,7 @@ def ensure_runtime_migrated() -> Optional[DetectionResult]:
 
             _seed_migratehistory(conn)
             _stamp_halo_head(conn)
+            _run_post_halo_data_migrations(conn)
 
             _write_state(
                 conn,
@@ -218,10 +223,16 @@ def migrate_auto(
         }
 
         if detection.family == "fresh":
+            if not dry_run and not backup_only:
+                _run_post_halo_data_migrations(conn)
+                conn.commit()
             result["action"] = "fresh_db"
             return result
 
         if detection.family == "already_halo":
+            if not dry_run and not backup_only:
+                _run_post_halo_data_migrations(conn)
+                conn.commit()
             result["action"] = "already_halo"
             return result
 
@@ -690,6 +701,125 @@ def _ensure_state_table(conn: Connection) -> None:
             """
         )
     )
+
+
+def _ensure_data_migration_table(conn: Connection) -> None:
+    tables = set(inspect(conn).get_table_names())
+    if HALO_DATA_MIGRATION_TABLE in tables:
+        return
+    conn.execute(
+        text(
+            f"""
+            CREATE TABLE "{HALO_DATA_MIGRATION_TABLE}" (
+                key TEXT PRIMARY KEY,
+                details TEXT NULL,
+                completed_at BIGINT NOT NULL
+            )
+            """
+        )
+    )
+
+
+def _has_completed_data_migration(conn: Connection, key: str) -> bool:
+    _ensure_data_migration_table(conn)
+    row = conn.execute(
+        text(
+            f'SELECT 1 FROM "{HALO_DATA_MIGRATION_TABLE}" '
+            "WHERE key = :key LIMIT 1"
+        ),
+        {"key": key},
+    ).first()
+    return row is not None
+
+
+def _mark_data_migration_completed(
+    conn: Connection, key: str, details: Optional[dict[str, Any]] = None
+) -> None:
+    _ensure_data_migration_table(conn)
+    payload = {
+        "key": key,
+        "details": json.dumps(details or {}, ensure_ascii=False),
+        "completed_at": _now(),
+    }
+    if _has_completed_data_migration(conn, key):
+        conn.execute(
+            text(
+                f"""
+                UPDATE "{HALO_DATA_MIGRATION_TABLE}"
+                SET details = :details, completed_at = :completed_at
+                WHERE key = :key
+                """
+            ),
+            payload,
+        )
+        return
+
+    conn.execute(
+        text(
+            f"""
+            INSERT INTO "{HALO_DATA_MIGRATION_TABLE}" (key, details, completed_at)
+            VALUES (:key, :details, :completed_at)
+            """
+        ),
+        payload,
+    )
+
+
+def _settings_payload_to_dict(value: Any) -> dict:
+    if isinstance(value, dict):
+        return json.loads(json.dumps(value, ensure_ascii=False))
+    if isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+            return parsed if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _backfill_user_connection_metadata(conn: Connection) -> dict[str, int]:
+    from open_webui.models.users import User
+    from open_webui.utils.user_connections import build_migrated_user_settings
+
+    scanned_users = 0
+    updated_users = 0
+
+    if not _table_exists(conn, "user"):
+        return {"scanned_users": 0, "updated_users": 0}
+
+    rows = conn.execute(text('SELECT id, role, settings FROM "user"')).mappings().all()
+    for row in rows:
+        scanned_users += 1
+        settings_dict = _settings_payload_to_dict(row.get("settings"))
+        next_settings, changed = build_migrated_user_settings(
+            settings_dict,
+            is_admin=str(row.get("role") or "").strip().lower() == "admin",
+            global_provider_defaults=None,
+            id_strategy="derived",
+        )
+        if not changed or next_settings == settings_dict:
+            continue
+
+        values = {"settings": next_settings}
+        if "updated_at" in User.__table__.c:
+            values["updated_at"] = _now()
+
+        conn.execute(
+            User.__table__.update().where(User.__table__.c.id == row["id"]).values(**values)
+        )
+        updated_users += 1
+
+    return {"scanned_users": scanned_users, "updated_users": updated_users}
+
+
+def _run_post_halo_data_migrations(conn: Connection) -> None:
+    if not _has_completed_data_migration(conn, HALO_CONNECTION_METADATA_BACKFILL_KEY):
+        details = _backfill_user_connection_metadata(conn)
+        _mark_data_migration_completed(
+            conn,
+            HALO_CONNECTION_METADATA_BACKFILL_KEY,
+            details,
+        )
 
 
 def _write_state(

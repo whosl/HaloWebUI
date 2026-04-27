@@ -35,6 +35,9 @@
 						)
 					: getErrorDetail(error, $i18n.t('Failed to update settings'))
 			);
+			if (error && typeof error === 'object') {
+				(error as { __toastShown?: boolean }).__toastShown = true;
+			}
 			throw error;
 		}
 	};

@@ -431,6 +431,74 @@
 	const getCanonicalModelId = (id: string): string =>
 		resolveModelSelectionId($models, id, { preserveAmbiguous: true });
 	const getModelRequestId = (model: Model): string => getModelSelectionId(model) || model.id;
+	const MODEL_CONNECTION_AMBIGUOUS_CODE = 'model_connection_ambiguous';
+	const MODEL_CONNECTION_STALE_CODE = 'model_connection_stale';
+	const getModelResolutionDetail = (error: unknown) => {
+		if (!error || typeof error !== 'object') return null;
+
+		const detail =
+			'detail' in error && error.detail && typeof error.detail === 'object' ? error.detail : error;
+		if (!detail || typeof detail !== 'object') return null;
+		const payload = detail as Record<string, unknown>;
+
+		const code = typeof payload.code === 'string' ? payload.code : '';
+		if (code !== MODEL_CONNECTION_AMBIGUOUS_CODE && code !== MODEL_CONNECTION_STALE_CODE) {
+			return null;
+		}
+
+		return {
+			code,
+			message: typeof payload.message === 'string' ? payload.message : '',
+			requestedModelId:
+				typeof payload.requested_model_id === 'string' ? payload.requested_model_id : '',
+			candidates: Array.isArray(payload.candidates)
+				? payload.candidates.map((candidate) => `${candidate ?? ''}`.trim()).filter(Boolean)
+				: []
+		};
+	};
+	const openModelSelector = async (index = 0, searchValue = '') => {
+		const button = document.getElementById(`model-selector-${index}-button`) as HTMLButtonElement | null;
+		if (!button) return;
+		button.click();
+		await tick();
+		const input = document.getElementById('model-search-input') as HTMLInputElement | null;
+		if (!input) return;
+		input.focus();
+		if (searchValue) {
+			input.value = searchValue;
+			input.dispatchEvent(new Event('input'));
+		}
+	};
+	const promptModelReselection = async ({
+		index = 0,
+		rawModelId = '',
+		ambiguous = false
+	}: {
+		index?: number;
+		rawModelId?: string;
+		ambiguous?: boolean;
+	}) => {
+		if (index >= 0 && index < selectedModels.length) {
+			selectedModels[index] = '';
+			selectedModels = [...selectedModels];
+		}
+
+		if (ambiguous) {
+			toast.error(
+				$i18n.t(
+					'This chat was saved in an older version with only the model name. Multiple connections now share that model. Please reselect the correct model with its connection suffix.'
+				)
+			);
+		} else {
+			toast.error(
+				$i18n.t(
+					'The saved model connection is no longer available. Please reselect the correct model with its connection suffix.'
+				)
+			);
+		}
+
+		await openModelSelector(index, rawModelId);
+	};
 	const getVisibleSkillIds = () =>
 		($skillsStore ?? []).map((skill) => String(skill?.id ?? '')).filter((id) => id);
 	const filterVisibleSkillIds = (ids: string[] = []) => {
@@ -3313,6 +3381,7 @@
 		});
 	};
 	const chatCompletedHandler = async (chatId, modelId, responseMessageId, messages) => {
+		const responseModelIndex = history.messages[responseMessageId]?.modelIdx ?? 0;
 		const res = await chatCompleted(localStorage.token, {
 			model: modelId,
 			messages: messages.map((m) => ({
@@ -3328,9 +3397,24 @@
 			chat_id: chatId,
 			session_id: $socket?.id,
 			id: responseMessageId
-		}).catch((error) => {
-			toast.error(`${error}`);
-			messages.at(-1).error = { content: error };
+		}).catch(async (error) => {
+			const resolutionDetail = getModelResolutionDetail(error);
+			if (resolutionDetail) {
+				await promptModelReselection({
+					index: responseModelIndex,
+					rawModelId: resolutionDetail.requestedModelId || `${modelId ?? ''}`.trim(),
+					ambiguous: resolutionDetail.code === MODEL_CONNECTION_AMBIGUOUS_CODE
+				});
+				messages.at(-1).error = {
+					type: 'model_resolution_error',
+					content: resolutionDetail.message || formatError(error),
+					detail: resolutionDetail
+				};
+				return null;
+			}
+
+			toast.error(formatError(error));
+			messages.at(-1).error = { content: formatError(error) };
 
 			return null;
 		});
@@ -3382,6 +3466,7 @@
 
 	const chatActionHandler = async (chatId, actionId, modelId, responseMessageId, event = null) => {
 		const messages = createMessagesList(history, responseMessageId);
+		const responseModelIndex = history.messages[responseMessageId]?.modelIdx ?? 0;
 
 		const res = await chatAction(localStorage.token, actionId, {
 			model: modelId,
@@ -3398,9 +3483,24 @@
 			chat_id: chatId,
 			session_id: $socket?.id,
 			id: responseMessageId
-		}).catch((error) => {
-			toast.error(`${error}`);
-			messages.at(-1).error = { content: error };
+		}).catch(async (error) => {
+			const resolutionDetail = getModelResolutionDetail(error);
+			if (resolutionDetail) {
+				await promptModelReselection({
+					index: responseModelIndex,
+					rawModelId: resolutionDetail.requestedModelId || `${modelId ?? ''}`.trim(),
+					ambiguous: resolutionDetail.code === MODEL_CONNECTION_AMBIGUOUS_CODE
+				});
+				messages.at(-1).error = {
+					type: 'model_resolution_error',
+					content: resolutionDetail.message || formatError(error),
+					detail: resolutionDetail
+				};
+				return null;
+			}
+
+			toast.error(formatError(error));
+			messages.at(-1).error = { content: formatError(error) };
 			return null;
 		});
 
@@ -3829,7 +3929,7 @@
 
 	const submitPrompt = async (userPrompt, { _raw = false } = {}) => {
 		const messages = createMessagesList(history, history.currentId);
-		const hasAmbiguousModelSelection = selectedModels.some((modelId) =>
+		const ambiguousSelectionIndex = selectedModels.findIndex((modelId) =>
 			ambiguousModelIds.has(`${modelId ?? ''}`.trim())
 		);
 		const _selectedModels = selectedModels.map((modelId) => getCanonicalModelId(modelId));
@@ -3852,8 +3952,12 @@
 			toast.error($i18n.t('Please enter a prompt'));
 			return;
 		}
-		if (hasAmbiguousModelSelection) {
-			toast.error($i18n.t('Model connection is ambiguous. Please select the model again.'));
+		if (ambiguousSelectionIndex !== -1) {
+			await promptModelReselection({
+				index: ambiguousSelectionIndex,
+				rawModelId: `${selectedModels[ambiguousSelectionIndex] ?? ''}`.trim(),
+				ambiguous: true
+			});
 			return;
 		}
 		if (selectedModels.includes('')) {
@@ -3983,7 +4087,11 @@
 			const requestedModelId = `${modelId ?? ''}`.trim();
 			const resolvedModelId = getCanonicalModelId(requestedModelId);
 			if (!resolvedModelId || ambiguousModelIds.has(requestedModelId)) {
-				toast.error($i18n.t('Model connection is unavailable. Please select the model again.'));
+				await promptModelReselection({
+					index: typeof modelIdx === 'number' ? modelIdx : 0,
+					rawModelId: requestedModelId,
+					ambiguous: ambiguousModelIds.has(requestedModelId)
+				});
 				return;
 			}
 			selectedModelIds = [resolvedModelId];
@@ -4363,15 +4471,25 @@
 			},
 			`${WEBUI_BASE_URL}/api`
 		).catch(async (error) => {
-			toast.error(`${error}`);
+			const resolutionDetail = getModelResolutionDetail(error);
+			if (resolutionDetail) {
+				await promptModelReselection({
+					index: responseMessage.modelIdx ?? 0,
+					rawModelId: resolutionDetail.requestedModelId || getModelRequestId(model),
+					ambiguous: resolutionDetail.code === MODEL_CONNECTION_AMBIGUOUS_CODE
+				});
+				responseMessage.error = {
+					type: 'model_resolution_error',
+					content: resolutionDetail.message || `${error}`,
+					detail: resolutionDetail
+				};
+				responseMessage.done = true;
+				history.messages[responseMessageId] = responseMessage;
+				history.currentId = responseMessageId;
+				return null;
+			}
 
-			responseMessage.error = {
-				content: error
-			};
-			responseMessage.done = true;
-
-			history.messages[responseMessageId] = responseMessage;
-			history.currentId = responseMessageId;
+			await handleOpenAIError(error, responseMessage);
 			return null;
 		});
 
@@ -4403,6 +4521,15 @@
 		if (typeof innerError === 'object') {
 			if ('detail' in innerError && typeof innerError.detail === 'string') {
 				return innerError.detail;
+			}
+			if (
+				'detail' in innerError &&
+				innerError.detail &&
+				typeof innerError.detail === 'object' &&
+				'message' in innerError.detail &&
+				typeof innerError.detail.message === 'string'
+			) {
+				return innerError.detail.message;
 			}
 
 			if ('error' in innerError) {
@@ -4828,11 +4955,35 @@
 			responseMessage.done = false;
 			await tick();
 
-			const model = getModelById(responseMessage.model);
+			const requestedModelId = `${responseMessage?.model ?? ''}`.trim();
+			const resolvedModelId = getCanonicalModelId(requestedModelId);
+			if (!resolvedModelId || ambiguousModelIds.has(requestedModelId)) {
+				await promptModelReselection({
+					index: responseMessage.modelIdx ?? 0,
+					rawModelId: requestedModelId,
+					ambiguous: ambiguousModelIds.has(requestedModelId)
+				});
+				responseMessage.done = true;
+				history.messages[history.currentId] = responseMessage;
+				return;
+			}
+
+			const model = getModelById(resolvedModelId);
 
 			if (model) {
+				responseMessage.model = getModelRequestId(model);
+				history.messages[history.currentId] = responseMessage;
 				await sendPromptSocket(history, model, responseMessage.id, _chatId);
+				return;
 			}
+
+			responseMessage.done = true;
+			history.messages[history.currentId] = responseMessage;
+			await promptModelReselection({
+				index: responseMessage.modelIdx ?? 0,
+				rawModelId: requestedModelId,
+				ambiguous: false
+			});
 		}
 	};
 

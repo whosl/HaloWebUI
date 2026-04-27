@@ -265,10 +265,48 @@
 	let previewAlt = '';
 	let selectedModelNeedsReselection = false;
 	let imageModelReselectionPrompted = false;
+	const WORKSPACE_IMAGE_MODEL_SELECTOR_ID = 'workspace-image-model-selector';
+	const MODEL_CONNECTION_AMBIGUOUS_CODE = 'model_connection_ambiguous';
+	const MODEL_CONNECTION_STALE_CODE = 'model_connection_stale';
 
 	const isAdmin = () => $user?.role === 'admin';
 	const formatError = (error: unknown) =>
 		localizeCommonError(error, (key, options) => $i18n.t(key, options));
+	const getModelResolutionDetail = (error: unknown) => {
+		if (!error || typeof error !== 'object') return null;
+
+		const detail =
+			'detail' in error && error.detail && typeof error.detail === 'object' ? error.detail : error;
+		if (!detail || typeof detail !== 'object') return null;
+		const payload = detail as Record<string, unknown>;
+
+		const code = typeof payload.code === 'string' ? payload.code : '';
+		if (code !== MODEL_CONNECTION_AMBIGUOUS_CODE && code !== MODEL_CONNECTION_STALE_CODE) {
+			return null;
+		}
+
+		return {
+			code,
+			message: typeof payload.message === 'string' ? payload.message : '',
+			requestedModelId:
+				typeof payload.requested_model_id === 'string' ? payload.requested_model_id : ''
+		};
+	};
+	const openImageModelSelector = async (searchValue = '') => {
+		const button = document.getElementById(WORKSPACE_IMAGE_MODEL_SELECTOR_ID) as HTMLButtonElement | null;
+		if (!button) return;
+		button.click();
+		await tick();
+		const input = document.querySelector(
+			'[data-bits-select-content] input, [role="listbox"] input'
+		) as HTMLInputElement | null;
+		if (!input) return;
+		input.focus();
+		if (searchValue) {
+			input.value = searchValue;
+			input.dispatchEvent(new Event('input'));
+		}
+	};
 	const getModelOptionValue = (model: ImageGenerationModel | null | undefined) =>
 		`${model?.selection_id ?? model?.selection_key ?? model?.legacy_id ?? model?.id ?? ''}`.trim();
 	const getModelLegacyValues = (model: ImageGenerationModel | null | undefined) =>
@@ -295,6 +333,7 @@
 		};
 	};
 	const requireImageModelReselection = (message: string) => {
+		const previousModelId = selectedModelRawId || selectedModel;
 		selectedModel = '';
 		selectedModelRawId = '';
 		selectedModelNeedsReselection = true;
@@ -302,6 +341,7 @@
 			toast.error($i18n.t(message));
 			imageModelReselectionPrompted = true;
 		}
+		void openImageModelSelector(previousModelId);
 	};
 	const getModelSourceBadge = (model: ImageGenerationModel | null | undefined) => {
 		const source = `${model?.source ?? ''}`.trim().toLowerCase();
@@ -792,27 +832,35 @@
 				preferredSelectionValue
 			);
 			if (resolvedSelection.ambiguous) {
-				requireImageModelReselection('The saved image model is ambiguous. Please select it again.');
+				requireImageModelReselection(
+					'This image workspace was saved in an older version with only the model name. Multiple connections now share that model. Please reselect the correct image model with its connection suffix.'
+				);
 				return;
 			}
 			nextModel = resolvedSelection.model;
 		}
 
 		if (!nextModel && preferredSelectionValue && preferredSelectionValue !== preferredModelId) {
-			requireImageModelReselection('The saved image model is unavailable. Please select it again.');
+			requireImageModelReselection(
+				'The saved image model connection is no longer available. Please reselect the correct image model with its connection suffix.'
+			);
 			return;
 		}
 
 		if (!nextModel && preferredModelId) {
 			const resolvedModel = findUniqueImageModelByIdentity(normalizedModels, preferredModelId);
 			if (resolvedModel.ambiguous) {
-				requireImageModelReselection('The saved image model is ambiguous. Please select it again.');
+				requireImageModelReselection(
+					'This image workspace was saved in an older version with only the model name. Multiple connections now share that model. Please reselect the correct image model with its connection suffix.'
+				);
 				return;
 			}
 			nextModel = resolvedModel.model;
 
 			if (!nextModel) {
-				requireImageModelReselection('The saved image model is unavailable. Please select it again.');
+				requireImageModelReselection(
+					'The saved image model connection is no longer available. Please reselect the correct image model with its connection suffix.'
+				);
 				return;
 			}
 		}
@@ -1005,6 +1053,21 @@
 				addToHistory('failed', undefined, 'Empty response');
 			}
 		} catch (error) {
+			const resolutionDetail = getModelResolutionDetail(error);
+			if (resolutionDetail) {
+				requireImageModelReselection(
+					resolutionDetail.code === MODEL_CONNECTION_AMBIGUOUS_CODE
+						? 'This image workspace was saved in an older version with only the model name. Multiple connections now share that model. Please reselect the correct image model with its connection suffix.'
+						: 'The saved image model connection is no longer available. Please reselect the correct image model with its connection suffix.'
+				);
+				addToHistory(
+					'failed',
+					undefined,
+					resolutionDetail.message || formatError(error)
+				);
+				return;
+			}
+
 			const learnedConstraint = extractImageConstraintFromError(error);
 			setLearnedConstraint(learnedConstraint);
 
@@ -1190,6 +1253,7 @@
 					<div class="workspace-toolbar">
 						<HaloSelect
 							bind:value={selectedModel}
+							triggerId={WORKSPACE_IMAGE_MODEL_SELECTOR_ID}
 							options={modelOptions}
 							placeholder={$i18n.t('Select a model')}
 							searchEnabled={true}
@@ -1323,6 +1387,7 @@
 							</div>
 							<HaloSelect
 								bind:value={selectedModel}
+								triggerId={WORKSPACE_IMAGE_MODEL_SELECTOR_ID}
 								options={modelOptions}
 								placeholder={$i18n.t('Select a model')}
 								searchEnabled={true}

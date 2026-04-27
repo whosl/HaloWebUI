@@ -38,8 +38,11 @@ from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_permission
 from open_webui.utils.error_handling import build_error_detail, read_requests_error_payload
 from open_webui.utils.model_identity import (
+    AMBIGUOUS_MODEL_CODE,
     AMBIGUOUS_MODEL_DETAIL,
+    STALE_MODEL_REF_CODE,
     STALE_MODEL_REF_DETAIL,
+    build_model_resolution_error,
     build_model_ref,
     build_selection_id,
     parse_selection_id,
@@ -2154,14 +2157,35 @@ async def _select_runtime_image_provider_source(
 
     if normalized_model and not selection_hint:
         if len(matched_sources) > 1:
-            raise HTTPException(status_code=400, detail=AMBIGUOUS_MODEL_DETAIL)
+            raise HTTPException(
+                status_code=400,
+                detail=build_model_resolution_error(
+                    code=AMBIGUOUS_MODEL_CODE,
+                    detail=AMBIGUOUS_MODEL_DETAIL,
+                    requested_model_id=selected_model,
+                ),
+            )
         if len(matched_sources) == 1:
             return matched_sources[0]
         if len(candidate_sources) > 1:
-            raise HTTPException(status_code=400, detail=AMBIGUOUS_MODEL_DETAIL)
+            raise HTTPException(
+                status_code=400,
+                detail=build_model_resolution_error(
+                    code=AMBIGUOUS_MODEL_CODE,
+                    detail=AMBIGUOUS_MODEL_DETAIL,
+                    requested_model_id=selected_model,
+                ),
+            )
 
     if normalized_model and selection_hint:
-        raise HTTPException(status_code=400, detail=STALE_MODEL_REF_DETAIL)
+        raise HTTPException(
+            status_code=400,
+            detail=build_model_resolution_error(
+                code=STALE_MODEL_REF_CODE,
+                detail=STALE_MODEL_REF_DETAIL,
+                requested_model_id=selected_model,
+            ),
+        )
 
     if first_success is not None:
         return first_success
@@ -4385,7 +4409,14 @@ async def image_generations(
                     prefer_shared=not bool(form_data.model) and bool(selected_model),
                 )
                 if source is None and model_ref:
-                    raise HTTPException(status_code=400, detail=STALE_MODEL_REF_DETAIL)
+                    raise HTTPException(
+                        status_code=400,
+                        detail=build_model_resolution_error(
+                            code=STALE_MODEL_REF_CODE,
+                            detail=STALE_MODEL_REF_DETAIL,
+                            requested_model_id=selected_model_value,
+                        ),
+                    )
                 if source is None:
                     source, discovered_models = await _select_runtime_image_provider_source(
                         request,
@@ -4527,7 +4558,14 @@ async def image_generations(
                     prefer_shared=not bool(form_data.model) and bool(selected_model),
                 )
                 if source is None and model_ref:
-                    raise HTTPException(status_code=400, detail=STALE_MODEL_REF_DETAIL)
+                    raise HTTPException(
+                        status_code=400,
+                        detail=build_model_resolution_error(
+                            code=STALE_MODEL_REF_CODE,
+                            detail=STALE_MODEL_REF_DETAIL,
+                            requested_model_id=selected_model_value,
+                        ),
+                    )
                 if source is None:
                     source, discovered_models = await _select_runtime_image_provider_source(
                         request,
@@ -4646,7 +4684,14 @@ async def image_generations(
                     prefer_shared=not bool(form_data.model) and bool(selected_model),
                 )
                 if source is None and model_ref:
-                    raise HTTPException(status_code=400, detail=STALE_MODEL_REF_DETAIL)
+                    raise HTTPException(
+                        status_code=400,
+                        detail=build_model_resolution_error(
+                            code=STALE_MODEL_REF_CODE,
+                            detail=STALE_MODEL_REF_DETAIL,
+                            requested_model_id=selected_model_value,
+                        ),
+                    )
                 if source is None:
                     source, discovered_models = await _select_runtime_image_provider_source(
                         request,

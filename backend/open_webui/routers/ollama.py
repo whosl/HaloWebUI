@@ -53,9 +53,8 @@ from open_webui.utils.auth import get_admin_user, get_verified_user
 from open_webui.utils.access_control import has_access
 from open_webui.utils.user_connections import (
     get_user_connections,
-    set_user_connection_provider_config,
 )
-from open_webui.utils.model_identity import parse_selection_id
+from open_webui.utils.model_identity import derive_connection_id, parse_selection_id
 
 
 from open_webui.config import (
@@ -633,8 +632,8 @@ async def get_all_models(request: Request, user: UserModel = None):
         request.state.OLLAMA_MODELS = {}
         return {"models": []}
 
-    # If multiple Ollama connections exist, ensure every connection has a stable internal prefix_id.
-    # This avoids id collisions and prevents UI crashes due to duplicate keyed list items.
+    # If multiple Ollama connections exist, derive a stable internal prefix_id in memory.
+    # Read paths must stay read-only so model discovery does not mutate user settings revisions.
     cfgs_changed = False
     if len(base_urls) > 1:
         used = set()
@@ -670,8 +669,12 @@ async def get_all_models(request: Request, user: UserModel = None):
                 if preserved_empty_idx == idx:
                     prefix_id = ""
                 else:
-                    prefix_id = secrets.token_hex(4)
-                    cfgs_changed = True
+                    prefix_id = derive_connection_id(
+                        provider="ollama",
+                        source="personal",
+                        url=url,
+                        api_key=api_config.get("key", None),
+                    )
 
             if prefix_id:
                 if prefix_id in used:
@@ -699,20 +702,6 @@ async def get_all_models(request: Request, user: UserModel = None):
             if cfgs.get(key) != next_cfg:
                 cfgs_changed = True
             cfgs[key] = next_cfg
-
-    # Persist prefix_id/name normalization when needed (keeps model ids stable across sessions).
-    if cfgs_changed and user:
-        try:
-            set_user_connection_provider_config(
-                user.id,
-                "ollama",
-                {
-                    "OLLAMA_BASE_URLS": base_urls,
-                    "OLLAMA_API_CONFIGS": cfgs,
-                },
-            )
-        except Exception:
-            pass
 
     request_tasks = []
     for idx, url in enumerate(base_urls):

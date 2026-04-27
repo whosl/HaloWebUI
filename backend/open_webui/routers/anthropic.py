@@ -50,7 +50,6 @@ from open_webui.models.models import Models
 from open_webui.models.users import UserModel
 from open_webui.utils.user_connections import (
     get_user_connections,
-    set_user_connection_provider_config,
 )
 from open_webui.storage.provider import Storage
 from open_webui.retrieval.document_processing import FILE_PROCESSING_MODE_NATIVE_FILE
@@ -65,6 +64,7 @@ from open_webui.utils.chat_image_refs import resolve_chat_image_url_to_bytes
 from open_webui.utils.error_handling import build_error_detail
 from open_webui.utils.model_identity import (
     decorate_provider_model_identity,
+    derive_connection_id,
     get_base_model_ref_from_model_info,
     get_model_ref_from_model,
     resolve_provider_connection_by_model_id,
@@ -1260,7 +1260,7 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
     if not base_urls:
         return []
 
-    # If multiple connections exist, ensure stable internal prefix_id values and cache a friendly name.
+    # If multiple connections exist, ensure stable internal prefix_id values in memory and cache a friendly name.
     cfgs_changed = False
     if len(base_urls) > 1:
         used = set()
@@ -1295,8 +1295,13 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                 if preserved_empty_idx == idx:
                     prefix_id = ""
                 else:
-                    prefix_id = secrets.token_hex(4)
-                    cfgs_changed = True
+                    prefix_id = derive_connection_id(
+                        provider="anthropic",
+                        source="personal",
+                        url=url,
+                        api_key=keys[idx] if idx < len(keys) else "",
+                        auth_type=api_config.get("auth_type"),
+                    )
 
             if prefix_id:
                 if prefix_id in used:
@@ -1325,22 +1330,6 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
             if cfgs.get(key) != next_cfg:
                 cfgs_changed = True
             cfgs[key] = next_cfg
-
-    # Persist prefix_id/name normalization when needed (keeps model ids stable across sessions).
-    if cfgs_changed and user:
-        try:
-            set_user_connection_provider_config(
-                user.id,
-                "anthropic",
-                {
-                    "ANTHROPIC_API_BASE_URLS": base_urls,
-                    "ANTHROPIC_API_KEYS": keys,
-                    "ANTHROPIC_API_CONFIGS": cfgs,
-                },
-            )
-        except Exception:
-            # Best-effort persistence; do not block model listing.
-            pass
 
     request_tasks = []
     for idx, url in enumerate(base_urls):

@@ -1480,12 +1480,35 @@ def _apply_connection_owner_for_model(request: Request, user, model: dict | None
         model_info = Models.get_model_by_id(model.get("id"))
         if model_info and model_info.user_id and model_info.user_id != user.id:
             from open_webui.models.users import Users  # local import to avoid heavy coupling
+            from open_webui.utils.user_connections import maybe_migrate_user_connections
 
             owner = Users.get_user_by_id(model_info.user_id)
             if owner:
+                owner = maybe_migrate_user_connections(request, owner)
                 request.state.connection_user = owner
     except Exception:
         pass
+
+
+def _get_http_error_message(exc: Exception) -> str:
+    if isinstance(exc, HTTPException):
+        detail = exc.detail
+        if isinstance(detail, dict):
+            message = detail.get("message") or detail.get("detail") or detail.get("code")
+            if message:
+                return str(message)
+        if detail is not None:
+            return str(detail)
+    return str(exc)
+
+
+def _raise_preserving_http_exception(exc: Exception, default_status: int) -> None:
+    if isinstance(exc, HTTPException):
+        raise exc
+    raise HTTPException(
+        status_code=default_status,
+        detail=str(exc),
+    )
 
 
 @app.get("/api/models/base")
@@ -1619,14 +1642,11 @@ async def chat_completion(
                 metadata["chat_id"],
                 metadata["message_id"],
                 {
-                    "error": {"content": str(e)},
+                    "error": {"content": _get_http_error_message(e)},
                 },
             )
 
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+        _raise_preserving_http_exception(e, status.HTTP_400_BAD_REQUEST)
 
     try:
         if metadata.get("local_response") is not None:
@@ -1752,10 +1772,7 @@ async def chat_completion(
             except Exception:
                 pass
 
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+        _raise_preserving_http_exception(e, status.HTTP_400_BAD_REQUEST)
 
 
 # Alias for chat_completion (Legacy)
@@ -1824,10 +1841,7 @@ async def chat_completed(
 
         return await chat_completed_handler(request, form_data, user)
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+        _raise_preserving_http_exception(e, status.HTTP_400_BAD_REQUEST)
 
 
 @app.post("/api/chat/actions/{action_id}")
@@ -1852,10 +1866,7 @@ async def chat_action(
 
         return await chat_action_handler(request, action_id, form_data, user)
     except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail=str(e),
-        )
+        _raise_preserving_http_exception(e, status.HTTP_400_BAD_REQUEST)
 
 
 @app.post("/api/tasks/stop/{task_id}")

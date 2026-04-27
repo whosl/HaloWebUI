@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import hashlib
+import json
 from typing import Any, Optional
 from urllib.parse import quote, unquote
 
@@ -9,6 +11,8 @@ from fastapi import HTTPException
 SELECTION_ID_PREFIX = "modelref"
 AMBIGUOUS_MODEL_DETAIL = "模型连接不明确，请重新选择模型。"
 STALE_MODEL_REF_DETAIL = "模型连接已失效，请重新选择模型。"
+AMBIGUOUS_MODEL_CODE = "model_connection_ambiguous"
+STALE_MODEL_REF_CODE = "model_connection_stale"
 
 
 def _clean_str(value: Any) -> str:
@@ -25,6 +29,62 @@ def _decode(value: str) -> str:
 
 def normalize_model_id(model_id: Any) -> str:
     return _clean_str(model_id)
+
+
+def build_model_resolution_error(
+    *,
+    code: str,
+    detail: str,
+    requested_model_id: Any = None,
+    candidates: Optional[list[Any]] = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "code": code,
+        "message": detail,
+        "next_action": "reselect_model",
+    }
+    normalized_requested_model_id = normalize_model_id(requested_model_id)
+    if normalized_requested_model_id:
+        payload["requested_model_id"] = normalized_requested_model_id
+    if candidates is not None:
+        payload["candidates"] = [
+            _clean_str(candidate)
+            for candidate in candidates
+            if _clean_str(candidate)
+        ]
+    return payload
+
+
+def derive_connection_id(
+    *,
+    provider: str,
+    url: Any = None,
+    api_key: Any = None,
+    auth_type: Any = None,
+    source: str = "personal",
+) -> str:
+    normalized_url = _clean_str(url).rstrip("/")
+    normalized_key = _clean_str(api_key)
+    normalized_auth_type = _clean_str(auth_type).lower()
+    normalized_provider = _clean_str(provider).lower()
+    normalized_source = _clean_str(source) or "personal"
+
+    if not normalized_url and not normalized_key:
+        return ""
+
+    payload = json.dumps(
+        {
+            "provider": normalized_provider,
+            "source": normalized_source,
+            "url": normalized_url,
+            "api_key": normalized_key,
+            "auth_type": normalized_auth_type,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
 
 
 def build_model_ref(
@@ -230,7 +290,14 @@ def resolve_model_from_lookup(
         return None
 
     if normalized_model_id in ambiguous_aliases:
-        raise HTTPException(status_code=400, detail=AMBIGUOUS_MODEL_DETAIL)
+        raise HTTPException(
+            status_code=400,
+            detail=build_model_resolution_error(
+                code=AMBIGUOUS_MODEL_CODE,
+                detail=AMBIGUOUS_MODEL_DETAIL,
+                requested_model_id=normalized_model_id,
+            ),
+        )
 
     return models_map.get(normalized_model_id)
 
@@ -380,7 +447,14 @@ def resolve_provider_connection_by_model_id(
 
     if parsed_selection:
         if parsed_selection["provider"] != _clean_str(provider).lower():
-            raise HTTPException(status_code=400, detail=STALE_MODEL_REF_DETAIL)
+            raise HTTPException(
+                status_code=400,
+                detail=build_model_resolution_error(
+                    code=STALE_MODEL_REF_CODE,
+                    detail=STALE_MODEL_REF_DETAIL,
+                    requested_model_id=requested_model_id,
+                ),
+            )
         upstream_model_id = parsed_selection["model_id"]
         effective_model_ref = parsed_selection["model_ref"]
     elif effective_model_ref:
@@ -402,7 +476,14 @@ def resolve_provider_connection_by_model_id(
                     upstream_model_id, api_config
                 )
                 return idx, url, key, api_config
-        raise HTTPException(status_code=400, detail=STALE_MODEL_REF_DETAIL)
+        raise HTTPException(
+            status_code=400,
+            detail=build_model_resolution_error(
+                code=STALE_MODEL_REF_CODE,
+                detail=STALE_MODEL_REF_DETAIL,
+                requested_model_id=requested_model_id,
+            ),
+        )
 
     if isinstance(cfgs, dict) and "." in requested_model_id:
         maybe_prefix, rest = requested_model_id.split(".", 1)
@@ -422,7 +503,19 @@ def resolve_provider_connection_by_model_id(
         request_models=request_models,
     )
     if len(request_candidates) > 1:
-        raise HTTPException(status_code=400, detail=AMBIGUOUS_MODEL_DETAIL)
+        raise HTTPException(
+            status_code=400,
+            detail=build_model_resolution_error(
+                code=AMBIGUOUS_MODEL_CODE,
+                detail=AMBIGUOUS_MODEL_DETAIL,
+                requested_model_id=requested_model_id,
+                candidates=[
+                    model.get("selection_id") or model.get("id")
+                    for model in request_candidates
+                    if isinstance(model, dict)
+                ],
+            ),
+        )
     if len(request_candidates) == 1:
         candidate_ref = get_model_ref_from_model(request_candidates[0])
         if candidate_ref:
@@ -436,13 +529,25 @@ def resolve_provider_connection_by_model_id(
                 request_models=request_models,
             )
 
-    usable_indices = [
-        idx
-        for idx, url in enumerate(base_urls)
-        if _clean_str(url) and (idx >= len(keys) or _clean_str(keys[idx]))
-    ]
+    usable_indices = []
+    for idx, url in enumerate(base_urls):
+        if not _clean_str(url):
+            continue
+
+        cfg = _get_connection_cfg(cfgs, base_urls, idx)
+        if cfg.get("enable", True) is False:
+            continue
+
+        usable_indices.append(idx)
     if len(usable_indices) > 1:
-        raise HTTPException(status_code=400, detail=AMBIGUOUS_MODEL_DETAIL)
+        raise HTTPException(
+            status_code=400,
+            detail=build_model_resolution_error(
+                code=AMBIGUOUS_MODEL_CODE,
+                detail=AMBIGUOUS_MODEL_DETAIL,
+                requested_model_id=requested_model_id,
+            ),
+        )
 
     chosen_idx = usable_indices[0] if usable_indices else 0
     cfg = _get_connection_cfg(cfgs, base_urls, chosen_idx)

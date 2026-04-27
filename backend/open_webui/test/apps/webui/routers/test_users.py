@@ -211,6 +211,8 @@ class TestUsers(AbstractPostgresTest):
             )
 
         assert response.status_code == 200
+        assert response.json()["ui"]["connections"]["openai"]["OPENAI_API_CONFIGS"]["0"]["name"] == "Wong"
+        assert response.json()["ui"]["connections"]["openai"]["OPENAI_API_CONFIGS"]["0"]["prefix_id"] == ""
         assert invalidated == ["2"]
         assert app.state.BASE_MODELS is None
         assert app.state.MODELS == {}
@@ -251,6 +253,13 @@ class TestUsers(AbstractPostgresTest):
                 "connections": {
                     "openai": {
                         "OPENAI_API_BASE_URLS": ["https://api.example.com/v1"],
+                        "OPENAI_API_KEYS": [""],
+                        "OPENAI_API_CONFIGS": {
+                            "0": {
+                                "name": "api.example.com",
+                                "prefix_id": "",
+                            }
+                        },
                     }
                 },
                 "autoFollowUps": False,
@@ -347,6 +356,8 @@ class TestUsers(AbstractPostgresTest):
                 "remark": "Primary",
                 "auth_type": "bearer",
                 "model_ids": ["gpt-4.1"],
+                "name": "Primary",
+                "prefix_id": "",
             }
         }
 
@@ -437,6 +448,19 @@ class TestUsers(AbstractPostgresTest):
             "https://api.example.com/v1"
         ]
         assert data["ui"]["_legacy_global_connections_seeded_v1"] is True
+
+        with mock_webui_user(id="2"):
+            response = self.fast_api_client.post(
+                self.create_url("/user/settings/update"),
+                json={
+                    "revision": 0,
+                    "ui": {"theme": "dark"},
+                },
+            )
+
+        assert response.status_code == 200
+        assert response.json()["revision"] == 1
+        assert response.json()["ui"]["theme"] == "dark"
 
         # Once the one-time backfill marker exists, removed providers should stay removed.
         self.users.update_user_by_id(

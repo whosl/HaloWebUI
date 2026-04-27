@@ -30,7 +30,6 @@ from open_webui.models.models import Models
 from open_webui.models.users import UserModel
 from open_webui.utils.user_connections import (
     get_user_connections,
-    set_user_connection_provider_config,
 )
 
 from open_webui.env import (
@@ -54,6 +53,7 @@ from open_webui.utils.native_web_search import (
 )
 from open_webui.utils.model_identity import (
     decorate_provider_model_identity,
+    derive_connection_id,
     get_base_model_ref_from_model_info,
     get_model_ref_from_model,
     resolve_model_from_lookup,
@@ -1107,7 +1107,7 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
     num_urls = len(base_urls)
     cfgs = cfgs or {}
 
-    # Normalize prefix_id for multi-connection setups and persist if needed.
+    # Normalize prefix_id for multi-connection setups in memory only.
     cfgs_changed = False
     if num_urls > 1:
         cfgs = dict(cfgs)
@@ -1134,8 +1134,12 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
                 if preserved_empty_idx == idx:
                     prefix_id = ""
                 else:
-                    prefix_id = secrets.token_hex(4)
-                    cfgs_changed = True
+                    prefix_id = derive_connection_id(
+                        provider="gemini",
+                        source="personal",
+                        url=base_urls[idx],
+                        api_key=keys[idx] if idx < len(keys) else "",
+                    )
 
             if prefix_id:
                 if prefix_id in used:
@@ -1163,20 +1167,6 @@ async def get_all_models_responses(request: Request, user: UserModel) -> list:
             if cfgs.get(key) != next_cfg:
                 cfgs_changed = True
             cfgs[key] = next_cfg
-
-    if cfgs_changed and user:
-        try:
-            set_user_connection_provider_config(
-                user.id,
-                "gemini",
-                {
-                    "GEMINI_API_BASE_URLS": base_urls,
-                    "GEMINI_API_KEYS": keys,
-                    "GEMINI_API_CONFIGS": cfgs,
-                },
-            )
-        except Exception:
-            pass
 
     request_tasks = []
     for idx, _url in enumerate(base_urls):
