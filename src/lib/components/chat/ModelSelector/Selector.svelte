@@ -707,11 +707,11 @@
 
 <DropdownMenu.Root
 	bind:open={show}
-	onOpenChange={async () => {
+	onOpenChange={async (nextOpen) => {
 		searchValue = '';
 		renderLimit = INITIAL_RENDER_LIMIT;
 
-		if (!show) {
+		if (!nextOpen) {
 			tagSortMode = false;
 			destroyTagSortable();
 			return;
@@ -725,7 +725,7 @@
 			resetView();
 		});
 
-		if (show && $models.length === 0) {
+		if ($models.length === 0) {
 			void ensureModels(localStorage.token, { reason: 'model-selector' }).catch((error) => {
 				const msg = error instanceof Error ? error.message : `${error}`;
 				toast.error(msg);

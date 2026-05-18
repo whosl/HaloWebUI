@@ -1330,11 +1330,6 @@
 									<div class="message-outline-toolbar-row flex items-end mt-2 gap-3 flex-wrap">
 						{#if (message?.sources || message?.citations) && (model?.info?.meta?.capabilities?.citations ?? true)}
 							<div class="flex shrink-0 items-center gap-2">
-								<Citations
-									bind:this={citationsRef}
-									id={message?.id}
-									sources={message?.sources ?? message?.citations}
-								/>
 								<Tooltip
 									content={($settings?.showInlineCitations ?? true)
 										? tr('隐藏正文引用标签', 'Hide inline citations')
@@ -1356,6 +1351,11 @@
 										{/if}
 									</button>
 								</Tooltip>
+								<Citations
+									bind:this={citationsRef}
+									id={message?.id}
+									sources={message?.sources ?? message?.citations}
+								/>
 							</div>
 						{/if}
 						{#if message.done || siblings.length > 1}
