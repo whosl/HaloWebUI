@@ -316,6 +316,7 @@ from open_webui.config import (
     # Retrieval (Web Search)
     ENABLE_WEB_SEARCH,
     ENABLE_NATIVE_WEB_SEARCH,
+    DEFAULT_WEB_SEARCH_MODE,
     WEB_SEARCH_ENGINE,
     BYPASS_WEB_SEARCH_EMBEDDING_AND_RETRIEVAL,
     WEB_SEARCH_RESULT_COUNT,
@@ -988,6 +989,7 @@ app.state.config.YOUTUBE_LOADER_PROXY_URL = YOUTUBE_LOADER_PROXY_URL
 
 app.state.config.ENABLE_WEB_SEARCH = ENABLE_WEB_SEARCH
 app.state.config.ENABLE_NATIVE_WEB_SEARCH = ENABLE_NATIVE_WEB_SEARCH
+app.state.config.DEFAULT_WEB_SEARCH_MODE = DEFAULT_WEB_SEARCH_MODE
 app.state.config.WEB_SEARCH_ENGINE = WEB_SEARCH_ENGINE
 app.state.config.WEB_SEARCH_DOMAIN_FILTER_LIST = WEB_SEARCH_DOMAIN_FILTER_LIST
 app.state.config.WEB_SEARCH_RESULT_COUNT = WEB_SEARCH_RESULT_COUNT
@@ -2028,6 +2030,7 @@ async def get_app_config(request: Request):
                     ),
                     "enable_halo_web_search": app.state.config.ENABLE_WEB_SEARCH,
                     "enable_native_web_search": app.state.config.ENABLE_NATIVE_WEB_SEARCH,
+                    "default_web_search_mode": app.state.config.DEFAULT_WEB_SEARCH_MODE,
                     "enable_code_execution": app.state.config.ENABLE_CODE_EXECUTION,
                     "enable_code_interpreter": app.state.config.ENABLE_CODE_INTERPRETER,
                     "enable_image_generation": app.state.config.ENABLE_IMAGE_GENERATION,

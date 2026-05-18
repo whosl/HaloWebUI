@@ -2985,6 +2985,15 @@ ENABLE_NATIVE_WEB_SEARCH = PersistentConfig(
     os.getenv("ENABLE_NATIVE_WEB_SEARCH", "False").lower() == "true",
 )
 
+DEFAULT_WEB_SEARCH_MODE = PersistentConfig(
+    "DEFAULT_WEB_SEARCH_MODE",
+    "rag.web.search.default_mode",
+    os.getenv("DEFAULT_WEB_SEARCH_MODE", "off").lower()
+    if os.getenv("DEFAULT_WEB_SEARCH_MODE", "off").lower()
+    in {"off", "halo", "native", "auto"}
+    else "off",
+)
+
 WEB_SEARCH_ENGINE = PersistentConfig(
     "WEB_SEARCH_ENGINE",
     "rag.web.search.engine",

@@ -1,5 +1,5 @@
 import type { Model, NativeWebSearchSupport } from '$lib/stores';
-import type { WebSearchMode } from '$lib/utils/web-search-mode';
+import { normalizeWebSearchMode, type WebSearchMode } from '$lib/utils/web-search-mode';
 import nativeWebSearchRules from '$lib/data/native-web-search-rules.json';
 
 type Translator = (key: string, options?: Record<string, unknown>) => string;
@@ -9,6 +9,7 @@ type WebSearchConfigLike = {
 		enable_web_search?: boolean;
 		enable_halo_web_search?: boolean;
 		enable_native_web_search?: boolean;
+		default_web_search_mode?: string;
 	};
 };
 
@@ -420,4 +421,27 @@ export function buildWebSearchModeOptions(
 				]
 			: [])
 	];
+}
+
+export function resolveConfiguredDefaultWebSearchMode(
+	t: Translator,
+	config: WebSearchConfigLike | null | undefined,
+	models: Array<ModelLike | null | undefined>,
+	canUseWebSearch: boolean
+): WebSearchMode {
+	if (!canUseWebSearch) {
+		return 'off';
+	}
+
+	const configuredMode = normalizeWebSearchMode(config?.features?.default_web_search_mode, 'off');
+	if (configuredMode === 'off') {
+		return 'off';
+	}
+
+	const availableModes = buildWebSearchModeOptions(t, config, models);
+	return availableModes.some(
+		(option) => option.value === configuredMode && option.disabled !== true
+	)
+		? configuredMode
+		: 'off';
 }

@@ -734,6 +734,7 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
         "web": {
             "ENABLE_WEB_SEARCH": request.app.state.config.ENABLE_WEB_SEARCH,
             "ENABLE_NATIVE_WEB_SEARCH": request.app.state.config.ENABLE_NATIVE_WEB_SEARCH,
+            "DEFAULT_WEB_SEARCH_MODE": request.app.state.config.DEFAULT_WEB_SEARCH_MODE,
             "WEB_SEARCH_ENGINE": request.app.state.config.WEB_SEARCH_ENGINE,
             "WEB_SEARCH_TRUST_ENV": request.app.state.config.WEB_SEARCH_TRUST_ENV,
             "WEB_SEARCH_RESULT_COUNT": request.app.state.config.WEB_SEARCH_RESULT_COUNT,
@@ -791,6 +792,7 @@ async def get_rag_config(request: Request, user=Depends(get_admin_user)):
 class WebConfig(BaseModel):
     ENABLE_WEB_SEARCH: Optional[bool] = None
     ENABLE_NATIVE_WEB_SEARCH: Optional[bool] = None
+    DEFAULT_WEB_SEARCH_MODE: Optional[str] = None
     WEB_SEARCH_ENGINE: Optional[str] = None
     WEB_SEARCH_TRUST_ENV: Optional[bool] = None
     WEB_SEARCH_RESULT_COUNT: Optional[int] = None
@@ -841,6 +843,11 @@ class WebConfig(BaseModel):
     DDGS_BACKEND: Optional[str] = None
     JINA_API_BASE_URL: Optional[str] = None
     FIRECRAWL_TIMEOUT: Optional[int] = None
+
+
+def _normalize_default_web_search_mode(value: Optional[str]) -> str:
+    mode = str(value or "off").strip().lower()
+    return mode if mode in {"off", "halo", "native", "auto"} else "off"
 
 
 class ConfigForm(BaseModel):
@@ -1322,6 +1329,13 @@ async def update_rag_config(
         request.app.state.config.ENABLE_WEB_SEARCH = form_data.web.ENABLE_WEB_SEARCH
         request.app.state.config.ENABLE_NATIVE_WEB_SEARCH = (
             form_data.web.ENABLE_NATIVE_WEB_SEARCH
+        )
+        request.app.state.config.DEFAULT_WEB_SEARCH_MODE = (
+            _normalize_default_web_search_mode(
+                form_data.web.DEFAULT_WEB_SEARCH_MODE
+                if form_data.web.DEFAULT_WEB_SEARCH_MODE is not None
+                else request.app.state.config.DEFAULT_WEB_SEARCH_MODE
+            )
         )
         request.app.state.config.WEB_SEARCH_ENGINE = form_data.web.WEB_SEARCH_ENGINE
         request.app.state.config.WEB_SEARCH_TRUST_ENV = (

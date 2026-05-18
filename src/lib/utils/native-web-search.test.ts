@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
-import { buildWebSearchModeOptions } from './native-web-search';
+import {
+	buildWebSearchModeOptions,
+	resolveConfiguredDefaultWebSearchMode
+} from './native-web-search';
 
 const t = (key: string) => key;
 
@@ -35,5 +38,117 @@ describe('native web search mode options', () => {
 		);
 
 		expect(options.find((option) => option.value === 'auto')?.disabled).toBe(true);
+	});
+
+	it('keeps new chats off when the admin default is missing or off', () => {
+		expect(
+			resolveConfiguredDefaultWebSearchMode(
+				t,
+				{
+					features: {
+						enable_halo_web_search: true,
+						enable_native_web_search: true
+					}
+				},
+				[{ id: 'gpt-5', owned_by: 'openai' }],
+				true
+			)
+		).toBe('off');
+
+		expect(
+			resolveConfiguredDefaultWebSearchMode(
+				t,
+				{
+					features: {
+						enable_halo_web_search: true,
+						enable_native_web_search: true,
+						default_web_search_mode: 'off'
+					}
+				},
+				[{ id: 'gpt-5', owned_by: 'openai' }],
+				true
+			)
+		).toBe('off');
+	});
+
+	it('uses the configured smart default only when a search route is available', () => {
+		expect(
+			resolveConfiguredDefaultWebSearchMode(
+				t,
+				{
+					features: {
+						enable_halo_web_search: true,
+						enable_native_web_search: false,
+						default_web_search_mode: 'auto'
+					}
+				},
+				[{ id: 'local-model', owned_by: 'anthropic' }],
+				true
+			)
+		).toBe('auto');
+
+		expect(
+			resolveConfiguredDefaultWebSearchMode(
+				t,
+				{
+					features: {
+						enable_halo_web_search: false,
+						enable_native_web_search: false,
+						default_web_search_mode: 'auto'
+					}
+				},
+				[{ id: 'local-model', owned_by: 'anthropic' }],
+				true
+			)
+		).toBe('off');
+	});
+
+	it('falls back to off when the configured native default cannot be used', () => {
+		expect(
+			resolveConfiguredDefaultWebSearchMode(
+				t,
+				{
+					features: {
+						enable_halo_web_search: true,
+						enable_native_web_search: false,
+						default_web_search_mode: 'native'
+					}
+				},
+				[{ id: 'gpt-5', owned_by: 'openai' }],
+				true
+			)
+		).toBe('off');
+
+		expect(
+			resolveConfiguredDefaultWebSearchMode(
+				t,
+				{
+					features: {
+						enable_halo_web_search: true,
+						enable_native_web_search: true,
+						default_web_search_mode: 'native'
+					}
+				},
+				[{ id: 'local-model', owned_by: 'anthropic' }],
+				true
+			)
+		).toBe('off');
+	});
+
+	it('keeps new chats off when the user cannot use web search', () => {
+		expect(
+			resolveConfiguredDefaultWebSearchMode(
+				t,
+				{
+					features: {
+						enable_halo_web_search: true,
+						enable_native_web_search: true,
+						default_web_search_mode: 'auto'
+					}
+				},
+				[{ id: 'gpt-5', owned_by: 'openai' }],
+				false
+			)
+		).toBe('off');
 	});
 });

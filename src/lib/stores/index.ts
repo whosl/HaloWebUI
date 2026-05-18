@@ -355,6 +355,7 @@ type Config = {
 		enable_web_search?: boolean;
 		enable_halo_web_search?: boolean;
 		enable_native_web_search?: boolean;
+		default_web_search_mode?: 'off' | 'halo' | 'native' | 'auto';
 		enable_google_drive_integration: boolean;
 		enable_onedrive_integration: boolean;
 		enable_image_generation: boolean;

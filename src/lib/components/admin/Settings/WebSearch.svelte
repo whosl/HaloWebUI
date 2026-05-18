@@ -453,6 +453,7 @@
 			webConfig[field] = payloadWeb[field];
 		}
 
+		webConfig.DEFAULT_WEB_SEARCH_MODE = payloadWeb.DEFAULT_WEB_SEARCH_MODE || 'off';
 		webConfig.PLAYWRIGHT_WS_URL = payloadWeb.PLAYWRIGHT_WS_URL || '';
 		webConfig.TAVILY_API_KEY = payloadWeb.TAVILY_API_KEY || '';
 		webConfig.TAVILY_SEARCH_API_BASE_URL =
@@ -478,6 +479,12 @@
 		);
 		syncPlaywrightModeFromConfig();
 		webConfig = webConfig;
+	};
+
+	const normalizeDefaultWebSearchModeForSave = (mode: unknown) => {
+		const value = String(mode || 'off').trim().toLowerCase();
+		const option = defaultWebSearchModeOptions.find((item) => item.value === value);
+		return option && option.disabled !== true ? value : 'off';
 	};
 
 	const formatValidationError = (detail: unknown) => {
@@ -527,6 +534,7 @@
 			webSearch: {
 				ENABLE_WEB_SEARCH: webConfig.ENABLE_WEB_SEARCH,
 				ENABLE_NATIVE_WEB_SEARCH: webConfig.ENABLE_NATIVE_WEB_SEARCH,
+				DEFAULT_WEB_SEARCH_MODE: webConfig.DEFAULT_WEB_SEARCH_MODE,
 				WEB_SEARCH_ENGINE: webConfig.WEB_SEARCH_ENGINE,
 				SEARXNG_QUERY_URL: webConfig.SEARXNG_QUERY_URL,
 				GOOGLE_PSE_API_KEY: webConfig.GOOGLE_PSE_API_KEY,
@@ -598,6 +606,40 @@
 			descriptionTone: isLoaderUnavailable(engine) ? 'warning' : undefined,
 			badge: isLoaderUnavailable(engine) ? tr('当前不可用', 'Unavailable') : undefined
 		}))
+	];
+	$: defaultWebSearchModeOptions = [
+		{
+			value: 'off',
+			label: $i18n.t('Off'),
+			description: tr('新聊天默认不启用联网搜索。', 'New chats start with web search off.')
+		},
+		{
+			value: 'auto',
+			label: $i18n.t('Smart Web Search'),
+			description: tr(
+				'新聊天默认自动判断是否需要联网。',
+				'New chats automatically decide whether web search is needed.'
+			),
+			disabled: !webConfig?.ENABLE_WEB_SEARCH && !webConfig?.ENABLE_NATIVE_WEB_SEARCH
+		},
+		{
+			value: 'halo',
+			label: 'HaloWebUI',
+			description: tr(
+				'新聊天默认使用 HaloWebUI 搜索。',
+				'New chats default to HaloWebUI search.'
+			),
+			disabled: !webConfig?.ENABLE_WEB_SEARCH
+		},
+		{
+			value: 'native',
+			label: $i18n.t('Model Native'),
+			description: tr(
+				'新聊天默认使用模型内置联网搜索。',
+				'New chats default to model-native web search.'
+			),
+			disabled: !webConfig?.ENABLE_NATIVE_WEB_SEARCH
+		}
 	];
 	$: selectedLoaderCapabilityMessage =
 		webConfig?.WEB_LOADER_ENGINE === 'firecrawl'
@@ -708,6 +750,7 @@
 				runtimeCapabilities = res?.capabilities ?? runtimeCapabilities;
 				webConfig.ENABLE_WEB_SEARCH = webConfig.ENABLE_WEB_SEARCH ?? false;
 				webConfig.ENABLE_NATIVE_WEB_SEARCH = webConfig.ENABLE_NATIVE_WEB_SEARCH ?? false;
+				webConfig.DEFAULT_WEB_SEARCH_MODE = webConfig.DEFAULT_WEB_SEARCH_MODE || 'off';
 				webConfig.TAVILY_API_KEY = webConfig.TAVILY_API_KEY || '';
 				webConfig.TAVILY_SEARCH_API_BASE_URL =
 					webConfig.TAVILY_SEARCH_API_BASE_URL || DEFAULT_TAVILY_API_BASE_URL;
@@ -796,6 +839,9 @@
 
 		// Use a copy so the UI stays as CSV strings even if the request fails.
 		const payloadWeb = normalizeNumericWebConfig({ ...webConfig }, true);
+		payloadWeb.DEFAULT_WEB_SEARCH_MODE = normalizeDefaultWebSearchModeForSave(
+			payloadWeb.DEFAULT_WEB_SEARCH_MODE
+		);
 		if (payloadWeb.WEB_LOADER_ENGINE === 'playwright') {
 			payloadWeb.PLAYWRIGHT_WS_URL =
 				playwrightMode === 'remote' ? String(payloadWeb.PLAYWRIGHT_WS_URL || '').trim() : '';
@@ -1162,7 +1208,7 @@
 						: 'glass-section'}"
 				>
 					<div class="space-y-4">
-						<div class="grid grid-cols-1 md:grid-cols-2 gap-3 items-stretch">
+						<div class="grid grid-cols-1 md:grid-cols-3 gap-3 items-stretch">
 							<div class="glass-item h-full px-4 py-3 flex items-start justify-between gap-4">
 								<div class="min-w-0">
 									<div class="text-sm font-medium">{$i18n.t('Enable Native Web Search')}</div>
@@ -1185,6 +1231,20 @@
 								<div class="shrink-0 pt-0.5">
 									<Switch bind:state={webConfig.ENABLE_WEB_SEARCH} />
 								</div>
+							</div>
+
+							<div class="glass-item h-full px-4 py-3 space-y-2">
+								<div class="min-w-0">
+									<div class="text-sm font-medium">{$i18n.t('Default Web Search Mode')}</div>
+									<div class="text-xs text-gray-400 dark:text-gray-500 mt-0.5">
+										{$i18n.t('Choose the web search mode used by new chats. Users can still change it per chat.')}
+									</div>
+								</div>
+								<HaloSelect
+									bind:value={webConfig.DEFAULT_WEB_SEARCH_MODE}
+									options={defaultWebSearchModeOptions}
+									className="w-full"
+								/>
 							</div>
 						</div>
 

@@ -98,7 +98,10 @@
 	import { isDedicatedImageGenerationModel } from '$lib/utils/model-capabilities';
 	import { resolveModelBuiltinWebSearchState } from '$lib/utils/model-web-search-preference';
 	import { applyUserSettingsSnapshot } from '$lib/utils/user-settings';
-	import { buildWebSearchModeOptions } from '$lib/utils/native-web-search';
+	import {
+		buildWebSearchModeOptions,
+		resolveConfiguredDefaultWebSearchMode
+	} from '$lib/utils/native-web-search';
 
 	import { generateChatCompletion } from '$lib/apis/ollama';
 	import {
@@ -1139,8 +1142,15 @@
 		isChatWebSearchFeatureEnabled() &&
 		($user?.role === 'admin' || $user?.permissions?.features?.web_search);
 
-	const getPreferredDefaultWebSearchMode = (): WebSearchMode =>
-		canUseChatWebSearch() ? 'auto' : 'off';
+	const getPreferredDefaultWebSearchMode = (
+		selectedModelsForMode: Model[] = getResolvedSelectedWebSearchModels()
+	): WebSearchMode =>
+		resolveConfiguredDefaultWebSearchMode(
+			(key, options) => get(i18n).t(key, options),
+			$config,
+			selectedModelsForMode,
+			canUseChatWebSearch()
+		);
 
 	let lastAutoImageGenerationSelectionKey = '';
 	const syncImageGenerationForDedicatedModel = ({ force = false } = {}) => {
