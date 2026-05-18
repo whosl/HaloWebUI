@@ -62,9 +62,7 @@ describe('native web search mode options', () => {
 		const auto = options.find((option) => option.value === 'auto');
 
 		expect(auto?.shortLabel).toBe('Smart · Model Native');
-		expect(auto?.description).toBe(
-			'先判断是否需要联网；白名单模型优先原生联网，失败自动切回 HaloWebUI，其余模型使用 HaloWebUI。'
-		);
+		expect(auto?.description).toBe('自动判断是否需要联网，适合日常使用。');
 		expect(getSmartWebSearchRouteLabel(t, config, models)).toBe('Smart · Model Native');
 	});
 
@@ -80,7 +78,7 @@ describe('native web search mode options', () => {
 		const auto = options.find((option) => option.value === 'auto');
 
 		expect(auto?.shortLabel).toBe('Smart · HaloWebUI');
-		expect(auto?.description).toBe('先判断是否需要联网；需要时使用 HaloWebUI 搜索。');
+		expect(auto?.description).toBe('自动判断是否需要联网，适合日常使用。');
 		expect(auto?.disabled).toBeFalsy();
 	});
 
@@ -98,20 +96,20 @@ describe('native web search mode options', () => {
 
 		expect(options.find((option) => option.value === 'off')).toMatchObject({
 			label: '关闭联网',
-			description: '本聊天不使用联网搜索。'
+			description: '本次对话不联网。'
 		});
 		expect(options.find((option) => option.value === 'halo')).toMatchObject({
 			label: 'HaloWebUI 搜索',
-			description: '使用 HaloWebUI 搜索，再把结果交给模型。'
+			description: '使用 HaloWebUI 搜索网页。'
 		});
 		expect(options.find((option) => option.value === 'native')).toMatchObject({
 			label: '模型原生联网',
-			description: '直接调用模型内置联网；失败时自动切回 HaloWebUI（如可用）。'
+			description: '使用模型自带的联网搜索。'
 		});
 		expect(options.find((option) => option.value === 'auto')).toMatchObject({
 			label: '智能联网搜索',
 			shortLabel: '智能 · 原生优先',
-			description: '先判断是否需要联网；白名单模型优先原生联网，失败自动切回 HaloWebUI，其余模型使用 HaloWebUI。'
+			description: '自动判断是否需要联网，适合日常使用。'
 		});
 	});
 

@@ -437,8 +437,8 @@
 		switch (normalizedWebSearchMode) {
 			case 'auto':
 				return tr(
-					'智能联网已开启：先判断是否需要联网；白名单模型优先原生联网，失败自动切回 HaloWebUI，其余模型使用 HaloWebUI。',
-					'Smart web search is enabled: decide first, prefer model-native search for allowlisted models, and fall back to HaloWebUI.'
+					'智能联网已开启：会自动判断是否需要联网。',
+					'Smart web search is enabled: it will automatically decide whether web search is needed.'
 				);
 			case 'native':
 				return $i18n.t('模型原生联网搜索已开启');
