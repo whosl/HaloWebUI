@@ -242,9 +242,20 @@
 	$: hasActiveVisibleStatus = displayStatusHistory.some(
 		(status) => !status?.hidden && status?.done === false
 	);
+	$: hasActiveImageGenerationStatus = displayStatusHistory.some(
+		(status) => !status?.hidden && status?.action === 'image_generation' && status?.done === false
+	);
+	$: showImageGenerationPlaceholder =
+		hasActiveImageGenerationStatus &&
+		!message.done &&
+		!message.error &&
+		!renderableMessageError &&
+		!hasVisibleAssistantOutput &&
+		!hasVisibleMessageFiles;
 	$: showInitialThinkingIndicator =
 		!message.done &&
 		!message.error &&
+		!showImageGenerationPlaceholder &&
 		!hasVisibleAssistantOutput &&
 		!hasAnyThinkingOutput &&
 		!hasAnyToolCallOutput;
@@ -1229,7 +1240,35 @@
 										class="w-full flex flex-col relative {!message.done ? 'streaming-fade' : ''}"
 										id="response-content-container"
 									>
-										{#if showInitialThinkingIndicator}
+										{#if showImageGenerationPlaceholder}
+											<div class="my-2 w-full max-w-[420px] select-none" aria-live="polite">
+												<div
+													class="image-generation-placeholder relative aspect-[4/3] overflow-hidden rounded-lg border border-gray-200/80 bg-gray-50 dark:border-gray-700/70 dark:bg-gray-900"
+												>
+													<div class="absolute inset-0 image-generation-sweep" />
+													<div
+														class="absolute inset-0 flex flex-col items-center justify-center gap-3 px-4 text-center"
+													>
+														<div
+															class="flex size-12 items-center justify-center rounded-lg border border-gray-200 bg-white text-gray-500 shadow-sm dark:border-gray-700 dark:bg-gray-850 dark:text-gray-300"
+														>
+															<Sparkles className="size-5" strokeWidth="1.8" />
+														</div>
+														<div class="space-y-1">
+															<div class="text-sm font-medium text-gray-700 dark:text-gray-200">
+																{tr('图片正在生成', 'Generating image')}
+															</div>
+															<div class="text-xs text-gray-500 dark:text-gray-400">
+																{tr(
+																	'请稍候，完成后会显示最终图片',
+																	'The final image will appear here'
+																)}
+															</div>
+														</div>
+													</div>
+												</div>
+											</div>
+										{:else if showInitialThinkingIndicator}
 											<!-- Keep the waiting indicator visible even before backend status steps arrive -->
 											<ThinkingIndicator
 												statusHistory={displayStatusHistory}
@@ -1919,6 +1958,42 @@
 
 	.buttons button:hover::after {
 		opacity: 0.04;
+	}
+
+	.image-generation-placeholder::before {
+		content: '';
+		position: absolute;
+		inset: 0;
+		background-image: linear-gradient(rgba(148, 163, 184, 0.12) 1px, transparent 1px),
+			linear-gradient(90deg, rgba(148, 163, 184, 0.12) 1px, transparent 1px);
+		background-size: 24px 24px;
+		mask-image: linear-gradient(to bottom, rgba(0, 0, 0, 0.75), rgba(0, 0, 0, 0.08));
+	}
+
+	.image-generation-sweep {
+		background: linear-gradient(
+			110deg,
+			transparent 0%,
+			rgba(255, 255, 255, 0.72) 45%,
+			transparent 70%
+		);
+		animation: image-generation-sweep 1.9s ease-in-out infinite;
+		transform: translateX(-120%);
+	}
+
+	:global(.dark) .image-generation-sweep {
+		background: linear-gradient(
+			110deg,
+			transparent 0%,
+			rgba(148, 163, 184, 0.16) 45%,
+			transparent 70%
+		);
+	}
+
+	@keyframes image-generation-sweep {
+		to {
+			transform: translateX(120%);
+		}
 	}
 
 	.toolbar-appear {

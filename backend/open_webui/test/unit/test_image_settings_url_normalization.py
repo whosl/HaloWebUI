@@ -1643,7 +1643,6 @@ def test_openai_gpt_image_edit_payload_uses_single_image_without_streaming(monke
         return {
             "status": 200,
             "headers": {},
-            "elapsed_ms": 10,
             "response_body": '{"data":[{"b64_json":"YWJj"}]}',
         }
 
@@ -1694,7 +1693,6 @@ def test_openai_compatible_dedicated_image_edit_payload_uses_single_image(monkey
         return {
             "status": 200,
             "headers": {},
-            "elapsed_ms": 10,
             "response_body": '{"data":[{"b64_json":"YWJj"}]}',
         }
 
@@ -1994,6 +1992,11 @@ def test_chat_image_generation_uses_model_ref_to_pick_prefixed_openai_connection
     monkeypatch.setattr(
         images_router,
         "_generate_via_openai_images_endpoint",
+        fake_images_endpoint,
+    )
+    monkeypatch.setattr(
+        images_router,
+        "_generate_via_openai_image_edits_endpoint",
         fake_images_endpoint,
     )
 
