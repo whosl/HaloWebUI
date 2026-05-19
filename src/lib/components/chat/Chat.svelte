@@ -73,6 +73,7 @@
 	} from '$lib/utils/model-identity';
 	import {
 		buildModelSelectionHint,
+		resolveAvailableChatModelSelectionValues,
 		resolveChatModelSelection,
 		resolveChatModelSelections,
 		type ChatModelResolution
@@ -2137,17 +2138,17 @@
 		if (value) {
 			try {
 				const stored = JSON.parse(value);
-				const valid = stored
-					.map((id: string) => {
-						const resolution = resolveChatModelSelection($models, { value: id });
-						return resolution.status === 'resolved' ? resolution.value : resolution.value;
-					})
-					.filter((id: string) => id);
+				const resolvedStored = Array.isArray(stored)
+					? resolveAvailableChatModelSelectionValues($models, stored)
+					: { values: [], droppedUnavailable: false };
+				const valid = resolvedStored.values;
 				if (valid.length > 0) {
 					selectedModels = valid;
 					if (usedLegacy) {
 						migrateStorageItem(sessionStorage, scopedKey, legacyKey, value);
 					}
+				} else if (resolvedStored.droppedUnavailable) {
+					removeSessionSelectedModels();
 				}
 			} catch {}
 		}
@@ -2932,12 +2933,11 @@
 			const hadExplicitSelectedModels = selectedModels.some(
 				(modelId) => `${modelId ?? ''}`.trim() !== ''
 			);
-			selectedModels = selectedModels
-				.map((modelId) => {
-					const resolution = resolveChatModelSelection($models, { value: modelId });
-					return resolution.status === 'resolved' ? resolution.value : resolution.value;
-				})
-				.filter((modelId) => modelId);
+			const resolvedSelectedModels = resolveAvailableChatModelSelectionValues($models, selectedModels);
+			selectedModels = resolvedSelectedModels.values;
+			if (resolvedSelectedModels.droppedUnavailable) {
+				removeSessionSelectedModels();
+			}
 			if (
 				selectedModels.length === 0 ||
 				(selectedModels.length === 1 && selectedModels[0] === '')
@@ -3099,10 +3099,12 @@
 
 		// Only validate model IDs when models are actually loaded
 		if (modelsMap.size > 0) {
-			selectedModels = selectedModels.map((modelId) => {
-				const resolution = resolveChatModelSelection($models, { value: modelId });
-				return resolution.status === 'resolved' ? resolution.value : resolution.value;
-			});
+			const resolvedSelectedModels = resolveAvailableChatModelSelectionValues($models, selectedModels);
+			selectedModels =
+				resolvedSelectedModels.values.length > 0 ? resolvedSelectedModels.values : [''];
+			if (resolvedSelectedModels.droppedUnavailable) {
+				removeSessionSelectedModels();
+			}
 		}
 
 		const userSettings = await getUserSettings(localStorage.token);

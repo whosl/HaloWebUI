@@ -110,10 +110,7 @@ const findBareModelName = (index: ModelRecoveryIndex, modelName: string) => {
 	};
 };
 
-const hasAmbiguousBareModelName = (
-	index: ModelRecoveryIndex,
-	modelIdHint?: string | null
-) => {
+const hasAmbiguousBareModelName = (index: ModelRecoveryIndex, modelIdHint?: string | null) => {
 	const target = normalize(modelIdHint);
 	if (!target) return false;
 	return uniqueBySelectionId(index.bareNames.get(target) ?? []).length > 1;
@@ -134,9 +131,7 @@ const findModelByStableRef = (
 	return findModelByRef(models, modelRef, modelIdHint);
 };
 
-export const buildModelSelectionHint = (
-	model?: AnyModel | null
-): ChatModelSelectionHint | null => {
+export const buildModelSelectionHint = (model?: AnyModel | null): ChatModelSelectionHint | null => {
 	if (!model) return null;
 
 	return {
@@ -165,21 +160,23 @@ export const resolveChatModelSelection = (
 ): ChatModelResolution => {
 	const value = normalize(typeof input === 'string' ? input : input?.value);
 	const selectionId = normalize(
-		typeof input === 'string' ? '' : input?.selection_id ?? input?.selectionId
+		typeof input === 'string' ? '' : (input?.selection_id ?? input?.selectionId)
 	);
 	const displayName = normalize(
-		typeof input === 'string' ? '' : input?.display_name ?? input?.displayName
+		typeof input === 'string' ? '' : (input?.display_name ?? input?.displayName)
 	);
 	const identityCandidates = uniqueStrings([value, selectionId]);
 	const parsedSelections = identityCandidates
 		.map((candidate) => parseModelSelectionId(candidate))
 		.filter((parsed): parsed is ParsedModelSelection => Boolean(parsed));
+	const hasStableConnectionSelection = parsedSelections.some((parsed) =>
+		Boolean(getRefConnectionId(parsed.modelRef))
+	);
 	const parsedModelId = normalize(parsedSelections.find((parsed) => parsed?.modelId)?.modelId);
 	const modelId =
-		normalize(typeof input === 'string' ? '' : input?.model_id ?? input?.modelId) ||
+		normalize(typeof input === 'string' ? '' : (input?.model_id ?? input?.modelId)) ||
 		parsedModelId;
-	const modelRef =
-		typeof input === 'string' ? null : (input?.model_ref ?? input?.modelRef ?? null);
+	const modelRef = typeof input === 'string' ? null : (input?.model_ref ?? input?.modelRef ?? null);
 	const displayLookupValue = displayName || (value.includes('|') ? value : '');
 	const searchValue = displayLookupValue || modelId || value || selectionId;
 
@@ -217,6 +214,13 @@ export const resolveChatModelSelection = (
 			};
 		}
 	}
+	if (hasStableConnectionSelection) {
+		return {
+			status: 'stale',
+			value: value || selectionId || modelId || displayName,
+			searchValue
+		};
+	}
 
 	const refModel = modelRef
 		? findModelByStableRef(models, index, modelRef, modelId || value || selectionId)
@@ -227,6 +231,13 @@ export const resolveChatModelSelection = (
 			value: getModelSelectionId(refModel),
 			searchValue,
 			model: refModel
+		};
+	}
+	if (modelRef && getRefConnectionId(modelRef)) {
+		return {
+			status: 'stale',
+			value: value || selectionId || modelId || displayName,
+			searchValue
 		};
 	}
 
@@ -268,3 +279,20 @@ export const resolveChatModelSelections = (
 			...(hints[index] ?? {})
 		})
 	);
+
+export const resolveAvailableChatModelSelectionValues = (
+	models: AnyModel[] = [],
+	values: unknown[] = [],
+	hints: Array<ChatModelSelectionHint | null | undefined> = []
+): { values: string[]; droppedUnavailable: boolean; resolutions: ChatModelResolution[] } => {
+	const resolutions = resolveChatModelSelections(models, values, hints);
+	return {
+		values: resolutions
+			.map((resolution) => (resolution.status === 'resolved' ? resolution.value : ''))
+			.filter(Boolean),
+		droppedUnavailable: resolutions.some(
+			(resolution, index) => normalize(values[index]) && resolution.status !== 'resolved'
+		),
+		resolutions
+	};
+};
