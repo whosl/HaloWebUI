@@ -29,26 +29,48 @@ const splitLinkTarget = (href: string) => {
 	};
 };
 
+const stripKnownGeneratedFileSandboxPrefix = (path: string): string | null => {
+	for (const prefix of ['/mnt/data/', '/mnt/generated/', '/mnt/uploads/']) {
+		if (path.startsWith(prefix)) {
+			return path.slice(prefix.length);
+		}
+	}
+
+	return null;
+};
+
 export const normalizeGeneratedFileLinkPath = (value: unknown): string | null => {
 	if (typeof value !== 'string') {
 		return null;
 	}
 
 	const trimmed = value.trim();
-	if (!trimmed || trimmed.startsWith('/') || trimmed.startsWith('//')) {
+	if (!trimmed || trimmed.startsWith('//')) {
 		return null;
 	}
 
-	if (/^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
+	const normalizedInput = trimmed.replaceAll('\\', '/');
+	const knownSandboxUrlMatch = /^(?:sandbox:|file:\/\/)(\/mnt\/(?:data|generated|uploads)\/.+)$/i.exec(
+		normalizedInput
+	);
+	const linkTarget = knownSandboxUrlMatch?.[1] ?? normalizedInput;
+
+	if (!knownSandboxUrlMatch && /^[a-z][a-z0-9+.-]*:/i.test(trimmed)) {
 		return null;
 	}
 
-	const { path } = splitLinkTarget(trimmed.replaceAll('\\', '/'));
-	let decodedPath = path;
+	const { path } = splitLinkTarget(linkTarget);
+	const normalizedPath =
+		path.startsWith('/') ? stripKnownGeneratedFileSandboxPrefix(path) : path;
+	if (!normalizedPath) {
+		return null;
+	}
+
+	let decodedPath = normalizedPath;
 	try {
-		decodedPath = decodeURIComponent(path);
+		decodedPath = decodeURIComponent(normalizedPath);
 	} catch {
-		decodedPath = path;
+		decodedPath = normalizedPath;
 	}
 
 	const parts = decodedPath

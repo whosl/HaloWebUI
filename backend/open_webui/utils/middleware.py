@@ -114,6 +114,7 @@ from open_webui.utils.skill_runtime import (
     get_selected_skill_context,
 )
 from open_webui.utils.task import (
+    build_fallback_chat_title,
     get_task_model_id,
     is_dedicated_image_generation_model,
     prompt_template,
@@ -4461,10 +4462,9 @@ async def process_chat_response(
         message = message_map.get(metadata["message_id"]) if message_map else None
 
         if message:
-            if metadata.get("skip_text_enhancements"):
-                return
-
             messages = get_message_list(message_map, message.get("id"))
+            if not messages:
+                return
 
             # Strip reasoning/thinking HTML blocks from message content to avoid
             # wasting tokens on title/tags/follow-up generation (H-12 KV cache protection).
@@ -4472,62 +4472,71 @@ async def process_chat_response(
                 if msg.get("role") == "assistant" and msg.get("content"):
                     msg["content"] = strip_reasoning_details(msg["content"])
 
-            if tasks and messages:
+            async def apply_chat_title(title: str):
+                Chats.update_chat_title_by_id(metadata["chat_id"], title)
+
+                await event_emitter(
+                    {
+                        "type": "chat:title",
+                        "data": title,
+                    }
+                )
+
+            def parse_generated_chat_title(res) -> str:
+                if not res or not isinstance(res, dict):
+                    return ""
+
+                choices = res.get("choices", [])
+                if len(choices) != 1:
+                    return ""
+
+                title_string = (
+                    choices[0].get("message", {}).get("content")
+                    or message.get("content")
+                    or ""
+                ).strip()
+                if not title_string:
+                    return ""
+
+                json_start = title_string.find("{")
+                json_end = title_string.rfind("}")
+                if json_start != -1 and json_end >= json_start:
+                    title_json = title_string[json_start : json_end + 1]
+                    try:
+                        return str(json.loads(title_json).get("title") or "").strip()
+                    except Exception:
+                        return ""
+
+                return title_string.strip(" \"'")
+
+            async def generate_or_fallback_chat_title() -> str:
+                try:
+                    res = await generate_title(
+                        request,
+                        {
+                            "model": message["model"],
+                            "messages": messages,
+                            "chat_id": metadata["chat_id"],
+                        },
+                        user,
+                    )
+                    title = parse_generated_chat_title(res)
+                except Exception as e:
+                    log.debug(f"Error generating chat title: {e}")
+                    title = ""
+
+                return title or build_fallback_chat_title(messages)
+
+            if tasks:
                 if TASKS.TITLE_GENERATION in tasks:
                     if tasks[TASKS.TITLE_GENERATION]:
-                        res = await generate_title(
-                            request,
-                            {
-                                "model": message["model"],
-                                "messages": messages,
-                                "chat_id": metadata["chat_id"],
-                            },
-                            user,
-                        )
+                        title = await generate_or_fallback_chat_title()
+                        await apply_chat_title(title)
+                    elif len([msg for msg in messages if msg.get("role") == "user"]) == 1:
+                        await apply_chat_title(build_fallback_chat_title(messages))
 
-                        if res and isinstance(res, dict):
-                            if len(res.get("choices", [])) == 1:
-                                title_string = (
-                                    res.get("choices", [])[0]
-                                    .get("message", {})
-                                    .get("content")
-                                ) or message.get("content") or "New Chat"
-                            else:
-                                title_string = ""
-
-                            title_string = title_string[
-                                title_string.find("{") : title_string.rfind("}") + 1
-                            ]
-
-                            try:
-                                title = json.loads(title_string).get(
-                                    "title", "New Chat"
-                                )
-                            except Exception as e:
-                                title = ""
-
-                            if not title:
-                                title = messages[0].get("content", "New Chat")
-
-                            Chats.update_chat_title_by_id(metadata["chat_id"], title)
-
-                            await event_emitter(
-                                {
-                                    "type": "chat:title",
-                                    "data": title,
-                                }
-                            )
-                    elif len(messages) == 2:
-                        title = messages[0].get("content", "New Chat")
-
-                        Chats.update_chat_title_by_id(metadata["chat_id"], title)
-
-                        await event_emitter(
-                            {
-                                "type": "chat:title",
-                                "data": message.get("content", "New Chat"),
-                            }
-                        )
+                if metadata.get("skip_text_enhancements"):
+                    return
 
                 if TASKS.TAGS_GENERATION in tasks and tasks[TASKS.TAGS_GENERATION]:
                     res = await generate_chat_tags(

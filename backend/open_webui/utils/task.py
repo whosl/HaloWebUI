@@ -116,6 +116,71 @@ def is_dedicated_image_generation_model(model: Optional[dict[str, Any]]) -> bool
     return False
 
 
+def build_fallback_chat_title(
+    messages: list[dict], default: str = "New Chat", max_length: int = 15
+) -> str:
+    title = get_last_user_message(messages) or ""
+    title = str(title)
+
+    title = re.sub(
+        r"<details\s+type=\"reasoning\"[^>]*>.*?<\/details>",
+        "",
+        title,
+        flags=re.S,
+    )
+    title = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", title)
+    title = re.sub(r"\[[^\]]*\]\((?:data|blob):[^)]*\)", "", title)
+    title = re.sub(r"https?://\S+", "", title)
+    title = re.sub(r"\s+", " ", title).strip()
+    title = title.strip(" \"'`#*_")
+
+    for _ in range(4):
+        next_title = re.sub(
+            r"^(?:请|麻烦|劳烦|帮我|帮忙|给我|为我|请你|麻烦你|"
+            r"你能不能|能不能|能否|可以)\s*",
+            "",
+            title,
+        ).strip()
+        if next_title == title:
+            break
+        title = next_title
+
+    title = re.sub(
+        r"^(?:生成|创建|制作|做|画|绘制|设计|写|撰写|起草|总结|概括|"
+        r"分析|解释|翻译|改写|润色)(?:一下|下)?"
+        r"(?:一?张|一?个|一?份|一?篇|一?段|这段|这份|这个|该)?\s*",
+        "",
+        title,
+    ).strip(" ，,。；;：:、-")
+    title = re.sub(
+        r"^(?:一?张|一?个|一?份|一?篇|一?段|这段|这份|这个|该)\s*",
+        "",
+        title,
+    ).strip(" ，,。；;：:、-")
+
+    title = next(
+        (
+            segment.strip(" \"'`#*_，,。；;：:、-")
+            for segment in re.split(r"[\n\r，,。；;！!？?：:]+", title)
+            if segment.strip(" \"'`#*_，,。；;：:、-")
+        ),
+        title,
+    )
+    title = re.split(
+        r"(?:重点|要求|需要|并且|同时|另外|还有|风格|视角)",
+        title,
+        maxsplit=1,
+    )[0].strip(" \"'`#*_，,。；;：:、-")
+
+    if not title:
+        return default
+
+    if max_length > 0 and len(title) > max_length:
+        title = title[:max_length].rstrip(" \"'`#*_，,。；;：:、-的了和与及")
+
+    return title or default
+
+
 def get_task_model_id(
     default_model_id: str,
     task_model: str,

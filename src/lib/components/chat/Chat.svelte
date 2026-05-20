@@ -4772,18 +4772,21 @@
 				id: responseMessageId,
 
 				...(!$temporaryChatEnabled &&
-				!imageGenerationActive &&
 				(messages.length == 1 ||
 					(messages.length == 2 &&
 						messages.at(0)?.role === 'system' &&
 						messages.at(1)?.role === 'user')) &&
 				(selectedModels[0] === getModelRequestId(model) || atSelectedModel !== undefined)
 					? {
-							background_tasks: {
-								title_generation: $settings?.title?.auto ?? true,
-								tags_generation: $settings?.autoTags ?? true,
-								follow_up_generation: $settings?.autoFollowUps ?? true
-							}
+							background_tasks: imageGenerationActive
+								? {
+										title_generation: $settings?.title?.auto ?? true
+									}
+								: {
+										title_generation: $settings?.title?.auto ?? true,
+										tags_generation: $settings?.autoTags ?? true,
+										follow_up_generation: $settings?.autoFollowUps ?? true
+									}
 						}
 					: !$temporaryChatEnabled &&
 					  !imageGenerationActive &&

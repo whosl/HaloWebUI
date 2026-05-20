@@ -26,6 +26,7 @@ type GeneratedFilesCollection = {
 };
 
 const GENERATED_WORKSPACE_ROOT = '/mnt/generated';
+const DATA_WORKSPACE_ROOT = '/mnt/data';
 const MAX_GENERATED_FILES = 20;
 const MAX_GENERATED_FILE_BYTES = 25 * 1024 * 1024;
 const MAX_GENERATED_TOTAL_BYTES = 50 * 1024 * 1024;
@@ -166,6 +167,7 @@ async function loadPyodideAndPackages(packages: string[] = []) {
 	// Create writable directories for user uploads and downloadable outputs.
 	self.pyodide.FS.mkdirTree('/mnt/uploads');
 	self.pyodide.FS.mkdirTree(GENERATED_WORKSPACE_ROOT);
+	self.pyodide.FS.mkdirTree(DATA_WORKSPACE_ROOT);
 	// self.pyodide.FS.mount(self.pyodide.FS.filesystems.IDBFS, {}, mountDir);
 
 	// // Load persisted files from IndexedDB (Initial Sync)
@@ -285,7 +287,10 @@ matplotlib.pyplot.show = show`);
 		}
 	}
 
-	const { files: generatedFiles, warnings: fileWarnings } = collectGeneratedFiles([{ root: workDir }]);
+	const { files: generatedFiles, warnings: fileWarnings } = collectGeneratedFiles([
+		{ root: workDir },
+		{ root: DATA_WORKSPACE_ROOT }
+	]);
 	(self as any).postMessage({
 		id,
 		result: self.result,

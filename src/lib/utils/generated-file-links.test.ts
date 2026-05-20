@@ -65,10 +65,18 @@ describe('generated-file-links', () => {
 		expect(normalizeGeneratedFileLinkPath('exports/workbook.xlsx')).toBe('exports/workbook.xlsx');
 		expect(normalizeGeneratedFileLinkPath('archive\\data.bin')).toBe('archive/data.bin');
 		expect(normalizeGeneratedFileLinkPath('notes.txt#preview')).toBe('notes.txt');
+		expect(normalizeGeneratedFileLinkPath('/mnt/data/report.pdf')).toBe('report.pdf');
+		expect(normalizeGeneratedFileLinkPath('/mnt/generated/run-1/report.pdf')).toBe(
+			'run-1/report.pdf'
+		);
+		expect(normalizeGeneratedFileLinkPath('sandbox:/mnt/data/report.pdf')).toBe('report.pdf');
+		expect(normalizeGeneratedFileLinkPath('file:///mnt/data/report.pdf')).toBe('report.pdf');
 	});
 
 	it('rejects absolute, external, and parent-traversal links', () => {
 		expect(normalizeGeneratedFileLinkPath('/api/v1/files/file/content')).toBeNull();
+		expect(normalizeGeneratedFileLinkPath('/etc/passwd')).toBeNull();
+		expect(normalizeGeneratedFileLinkPath('file:///etc/passwd')).toBeNull();
 		expect(normalizeGeneratedFileLinkPath('https://example.com/report.pdf')).toBeNull();
 		expect(normalizeGeneratedFileLinkPath('../report.pdf')).toBeNull();
 		expect(normalizeGeneratedFileLinkPath('..\\report.pdf')).toBeNull();
@@ -91,6 +99,9 @@ describe('generated-file-links', () => {
 			'/api/v1/files/file-5/content?attachment=true'
 		);
 		expect(resolveGeneratedFileDownloadUrl('exports/workbook.xlsx', files)).toBe(
+			'/api/v1/files/file-6/content?attachment=true'
+		);
+		expect(resolveGeneratedFileDownloadUrl('/mnt/data/workbook.xlsx', files)).toBe(
 			'/api/v1/files/file-6/content?attachment=true'
 		);
 		expect(resolveGeneratedFileDownloadUrl('artifacts/data.bin', files)).toBe(

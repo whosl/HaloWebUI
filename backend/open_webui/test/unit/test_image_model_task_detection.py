@@ -3,12 +3,18 @@ import pathlib
 import sys
 from types import SimpleNamespace
 
+from fastapi.responses import JSONResponse
+
 
 _BACKEND_DIR = pathlib.Path(__file__).resolve().parents[3]
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
 
-from open_webui.utils.task import is_dedicated_image_generation_model  # noqa: E402
+from open_webui.constants import TASKS  # noqa: E402
+from open_webui.utils.task import (  # noqa: E402
+    build_fallback_chat_title,
+    is_dedicated_image_generation_model,
+)
 from open_webui.utils import middleware  # noqa: E402
 
 
@@ -61,6 +67,128 @@ def test_image_model_detection_excludes_grok_imagine_video():
             "info": {"base_model_id": "grok-imagine-video"},
         }
     )
+
+
+def test_fallback_chat_title_uses_concise_user_prompt_snippet():
+    title = build_fallback_chat_title(
+        [
+            {"role": "system", "content": "忽略"},
+            {"role": "user", "content": "  生成一张橘猫在吃粮的照片，真实手机高清拍照视角  "},
+            {"role": "assistant", "content": "已生成图片"},
+        ]
+    )
+
+    assert title == "橘猫在吃粮的照片"
+
+
+def test_fallback_chat_title_trims_to_sidebar_length():
+    title = build_fallback_chat_title(
+        [
+            {
+                "role": "user",
+                "content": "请帮我分析一下英伟达最新股价和未来走势重点看财报影响",
+            },
+        ]
+    )
+
+    assert title == "英伟达最新股价和未来走势"
+    assert len(title) <= 15
+
+
+def test_image_generation_title_falls_back_to_user_prompt_when_title_task_fails(monkeypatch):
+    message_map = {
+        "user-1": {
+            "id": "user-1",
+            "role": "user",
+            "content": "生成一张橘猫在吃粮的照片，真实手机高清拍照视角",
+            "parentId": None,
+        },
+        "assistant-1": {
+            "id": "assistant-1",
+            "role": "assistant",
+            "content": "",
+            "parentId": "user-1",
+            "model": "gpt-image-2",
+        },
+    }
+    updated_titles = []
+    events = []
+
+    async def fake_event_emitter(event):
+        events.append(event)
+
+    async def fake_generate_title(*_args, **_kwargs):
+        return JSONResponse(status_code=400, content={"detail": "image model"})
+
+    def fake_upsert_message(_chat_id, message_id, message):
+        message_map[message_id] = {
+            **message_map.get(message_id, {}),
+            **message,
+        }
+
+    monkeypatch.setattr(middleware, "generate_title", fake_generate_title)
+    monkeypatch.setattr(
+        middleware, "get_event_emitter", lambda _metadata: fake_event_emitter
+    )
+    monkeypatch.setattr(middleware, "get_event_call", lambda _metadata: None)
+    monkeypatch.setattr(
+        middleware, "get_active_status_by_user_id", lambda _user_id: True
+    )
+    monkeypatch.setattr(
+        middleware.Chats, "get_messages_by_chat_id", lambda _chat_id: message_map
+    )
+    monkeypatch.setattr(
+        middleware.Chats, "get_chat_title_by_id", lambda _chat_id: "New Chat"
+    )
+    monkeypatch.setattr(
+        middleware.Chats,
+        "upsert_message_to_chat_by_id_and_message_id",
+        fake_upsert_message,
+    )
+    monkeypatch.setattr(
+        middleware.Chats,
+        "update_chat_title_by_id",
+        lambda _chat_id, title: updated_titles.append(title),
+    )
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                WEBUI_NAME="Halo WebUI",
+                config=SimpleNamespace(
+                    ENABLE_CHAT_RESPONSE_BASE64_IMAGE_URL_CONVERSION=False,
+                    WEBUI_URL="http://localhost",
+                ),
+            )
+        )
+    )
+    user = SimpleNamespace(id="user-1", email="u@example.com", name="User", role="user")
+    metadata = {
+        "session_id": "session-1",
+        "chat_id": "chat-1",
+        "message_id": "assistant-1",
+        "skip_text_enhancements": True,
+    }
+    response = {"choices": [{"message": {"content": "已生成图片"}}]}
+
+    asyncio.run(
+        middleware.process_chat_response(
+            request,
+            response,
+            {},
+            user,
+            metadata,
+            {},
+            [],
+            {TASKS.TITLE_GENERATION: True},
+        )
+    )
+
+    assert updated_titles == ["橘猫在吃粮的照片"]
+    assert events[-1] == {
+        "type": "chat:title",
+        "data": "橘猫在吃粮的照片",
+    }
 
 
 def test_dedicated_image_model_uses_current_chat_model_before_admin_default():
