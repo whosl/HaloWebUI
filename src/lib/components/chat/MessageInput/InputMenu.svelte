@@ -7,6 +7,7 @@
 
 	import { getTools } from '$lib/apis/tools';
 	import { getSkills } from '$lib/apis/skills';
+	import { translateWithDefault } from '$lib/i18n';
 	import { getWebSearchModeLabel, type WebSearchMode } from '$lib/utils/web-search-mode';
 	import type { WebSearchModeOption } from '$lib/utils/native-web-search';
 
@@ -28,6 +29,8 @@
 	import OneDrive from '$lib/components/icons/OneDrive.svelte';
 
 	const i18n = getContext('i18n');
+	const tr = (zh: string, en: string, options: Record<string, any> = {}) =>
+		translateWithDefault($i18n, zh, en, options);
 
 	export let screenCaptureHandler: Function;
 	export let uploadFilesHandler: Function;
@@ -48,7 +51,6 @@
 	];
 	export let onWebSearchModeChange: ((mode: WebSearchMode) => void) | null = null;
 	export let imageGenerationEnabled: boolean = false;
-	export let onImageGenerationPanelOpen: (() => void) | null = null;
 	export let codeInterpreterEnabled: boolean = false;
 
 	export let onClose: Function;
@@ -449,21 +451,20 @@
 						type="button"
 						class="flex w-full justify-between gap-2 items-center px-3 py-2 text-sm font-medium cursor-pointer rounded-xl hover:bg-gray-50 dark:hover:bg-gray-800"
 						on:click={() => {
-							imageGenerationEnabled = true;
-							onImageGenerationPanelOpen?.();
+							imageGenerationEnabled = !imageGenerationEnabled;
 							show = false;
 						}}
 					>
 						<div class="flex gap-2 items-center min-w-0">
 							<span
-								class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-teal-50 text-teal-600 dark:bg-teal-500/15 dark:text-teal-200"
+								class="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-gray-100 text-gray-600 dark:bg-gray-700/60 dark:text-gray-300"
 							>
 								<Wand2 class="size-4" strokeWidth={2} />
 							</span>
-							<div class="truncate">{$i18n.t('AI 绘图')}</div>
+							<div class="truncate">{tr('图片生成', 'Image Generation')}</div>
 						</div>
 						<div class="shrink-0 text-xs text-gray-500 dark:text-gray-400">
-							{imageGenerationEnabled ? $i18n.t('已开启') : $i18n.t('设置')}
+							{imageGenerationEnabled ? tr('开启生图', 'Image on') : tr('关闭生图', 'Image off')}
 						</div>
 					</button>
 				{/if}

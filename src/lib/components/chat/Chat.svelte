@@ -4940,6 +4940,14 @@
 	const inferOpenAIErrorFamily = (status: number | null, errorMessage: string): string => {
 		const message = `${errorMessage ?? ''}`.toLowerCase();
 
+		if (
+			message.includes('server disconnected without sending a response') ||
+			message.includes('remote protocol error') ||
+			message.includes('connection closed before receiving response') ||
+			message.includes('peer closed connection without sending complete message body')
+		) {
+			return 'upstream_response_lost';
+		}
 		if (status === 401 || status === 403) {
 			return 'auth_error';
 		}
@@ -5023,6 +5031,9 @@
 		if (family === 'timeout') {
 			return ['api_request_timeout'];
 		}
+		if (family === 'upstream_response_lost') {
+			return ['api_response_disconnected', 'proxy_error', 'possible_upstream_billed'];
+		}
 		if (status === 500) {
 			return ['api_server_error', 'proxy_error'];
 		}
@@ -5038,6 +5049,9 @@
 		}
 		if (family === 'rate_limited' || family === 'timeout' || family === 'cloudflare_timeout') {
 			return 'wait_retry';
+		}
+		if (family === 'upstream_response_lost') {
+			return 'check_upstream_before_retry';
 		}
 		if (family === 'upstream_service_error' && status !== null && status >= 500) {
 			return status === 500 ? 'retry_or_switch' : 'wait_retry';
@@ -5072,6 +5086,10 @@
 				return status
 					? $i18n.t('error.title.cloudflare_timeout', { status: statusValue })
 					: $i18n.t('error.title.cloudflare_timeout_no_status');
+			case 'upstream_response_lost':
+				return status
+					? $i18n.t('error.title.upstream_response_lost', { status: statusValue })
+					: $i18n.t('error.title.upstream_response_lost_no_status');
 			default:
 				return status
 					? $i18n.t('error.title.upstream_service_error', { status: statusValue })

@@ -18,6 +18,7 @@ from open_webui.models.models import Models
 from open_webui.utils.plugin import load_function_module_by_id
 from open_webui.utils.access_control import has_access
 from open_webui.utils.model_identity import (
+    build_model_ref,
     build_model_lookup,
     decorate_provider_model_identity,
     get_model_aliases,
@@ -43,6 +44,7 @@ log.setLevel(SRC_LOG_LEVELS["MAIN"])
 
 # Per-user base model cache: {user_id: (timestamp, models)}
 _base_model_cache: dict[str, tuple[float, list]] = {}
+_base_model_stale_fallback_cache: dict[str, tuple[float, list]] = {}
 _base_model_refresh_tasks: dict[str, asyncio.Task[list]] = {}
 _BASE_MODEL_CACHE_TTL = 5 * 60  # seconds
 _BASE_MODEL_CACHE_MAX_ENTRIES = 64
@@ -66,18 +68,37 @@ def _evict_stale_base_model_cache(now: float) -> None:
     for k in stale_keys:
         _base_model_cache.pop(k, None)
 
-    overflow = len(_base_model_cache) - _BASE_MODEL_CACHE_MAX_ENTRIES
-    if overflow <= 0:
-        return
-
-    oldest_keys = [
-        cache_key
-        for cache_key, _ in sorted(
-            _base_model_cache.items(), key=lambda item: item[1][0]
-        )[:overflow]
+    stale_fallback_keys = [
+        k
+        for k, (ts, _) in _base_model_stale_fallback_cache.items()
+        if now - ts > (_BASE_MODEL_CACHE_TTL * 2)
     ]
-    for cache_key in oldest_keys:
-        _base_model_cache.pop(cache_key, None)
+    for k in stale_fallback_keys:
+        _base_model_stale_fallback_cache.pop(k, None)
+
+    overflow = len(_base_model_cache) - _BASE_MODEL_CACHE_MAX_ENTRIES
+    if overflow > 0:
+        oldest_keys = [
+            cache_key
+            for cache_key, _ in sorted(
+                _base_model_cache.items(), key=lambda item: item[1][0]
+            )[:overflow]
+        ]
+        for cache_key in oldest_keys:
+            _base_model_cache.pop(cache_key, None)
+
+    fallback_overflow = (
+        len(_base_model_stale_fallback_cache) - _BASE_MODEL_CACHE_MAX_ENTRIES
+    )
+    if fallback_overflow > 0:
+        oldest_fallback_keys = [
+            cache_key
+            for cache_key, _ in sorted(
+                _base_model_stale_fallback_cache.items(), key=lambda item: item[1][0]
+            )[:fallback_overflow]
+        ]
+        for cache_key in oldest_fallback_keys:
+            _base_model_stale_fallback_cache.pop(cache_key, None)
 
 
 def invalidate_base_model_cache(user_id: Optional[str] = None) -> None:
@@ -87,7 +108,9 @@ def invalidate_base_model_cache(user_id: Optional[str] = None) -> None:
         else list(set(_base_model_cache.keys()) | set(_base_model_refresh_tasks.keys()))
     )
     for cache_key in cache_keys:
-        _base_model_cache.pop(cache_key, None)
+        cached = _base_model_cache.pop(cache_key, None)
+        if cached:
+            _base_model_stale_fallback_cache[cache_key] = cached
         task = _base_model_refresh_tasks.pop(cache_key, None)
         if task and not task.done():
             task.cancel()
@@ -107,17 +130,155 @@ async def _fetch_source_models(name: str, fetch_coro):
     return None
 
 
+def _provider_from_model(model: dict) -> str:
+    model_ref = get_model_ref_from_model(model)
+    provider = str(model_ref.get("provider") or "").strip().lower()
+    if provider:
+        return provider
+
+    owned_by = str(model.get("owned_by") or "").strip().lower()
+    if owned_by in {"google", "gemini"}:
+        return "gemini"
+    if owned_by in {"anthropic", "claude"}:
+        return "anthropic"
+    return owned_by
+
+
+def _model_ref_matches(model: dict, target_ref: dict) -> bool:
+    model_ref = get_model_ref_from_model(model)
+    if not model_ref:
+        return False
+
+    target_provider = str(target_ref.get("provider") or "").strip().lower()
+    model_provider = str(model_ref.get("provider") or "").strip().lower()
+    if target_provider and model_provider and target_provider != model_provider:
+        return False
+
+    target_source = str(target_ref.get("source") or "").strip()
+    model_source = str(model_ref.get("source") or "").strip()
+    if target_source and model_source and target_source != model_source:
+        return False
+
+    target_connection_id = str(
+        target_ref.get("connection_id") or target_ref.get("prefix_id") or ""
+    ).strip()
+    if target_connection_id:
+        model_connection_id = str(
+            model_ref.get("connection_id") or model_ref.get("prefix_id") or ""
+        ).strip()
+        return model_connection_id == target_connection_id
+
+    target_index = target_ref.get("connection_index")
+    if target_index is not None and str(target_index).strip() != "":
+        model_index = model_ref.get("connection_index")
+        return (
+            "" if model_index is None else str(model_index).strip()
+        ) == str(target_index).strip()
+
+    return False
+
+
+def _get_active_provider_connection_refs(
+    user: Optional[UserModel], provider: str
+) -> list[dict]:
+    try:
+        from open_webui.utils.user_connections import (
+            CONNECTION_PROVIDER_SPECS,
+            get_user_connections,
+        )
+
+        spec = CONNECTION_PROVIDER_SPECS.get(provider)
+        if spec is None:
+            return []
+
+        connections = get_user_connections(user)
+        provider_config = (
+            connections.get(provider) if isinstance(connections, dict) else {}
+        )
+        provider_config = provider_config if isinstance(provider_config, dict) else {}
+        urls = list(provider_config.get(spec["urls_key"]) or [])
+        cfgs = provider_config.get(spec["configs_key"]) or {}
+        cfgs = cfgs if isinstance(cfgs, dict) else {}
+
+        refs = []
+        for idx, url in enumerate(urls):
+            if not str(url or "").strip():
+                continue
+            cfg = cfgs.get(str(idx), cfgs.get(url, {})) or {}
+            if not isinstance(cfg, dict):
+                cfg = {}
+            if cfg.get("enable", True) is False:
+                continue
+
+            prefix_id = str(cfg.get("prefix_id") or "").strip()
+            refs.append(
+                build_model_ref(
+                    provider=provider,
+                    source="personal",
+                    connection_index=idx,
+                    connection_id=prefix_id or None,
+                )
+            )
+        return refs
+    except Exception:
+        return []
+
+
+def _fallback_models_for_provider(
+    fallback_models: Optional[list],
+    provider: str,
+    active_refs: Optional[list[dict]] = None,
+) -> list[dict]:
+    if not fallback_models:
+        return []
+
+    models = []
+    for model in fallback_models:
+        if not isinstance(model, dict):
+            continue
+        if _provider_from_model(model) != provider:
+            continue
+        if active_refs is not None and not any(
+            _model_ref_matches(model, ref) for ref in active_refs
+        ):
+            continue
+        models.append(copy.deepcopy(model))
+    return models
+
+
+def _provider_models_or_fallback(
+    *,
+    response,
+    provider: str,
+    data_key: str,
+    fallback_models: Optional[list],
+    user: Optional[UserModel],
+) -> list:
+    if isinstance(response, dict):
+        models = response.get(data_key, [])
+        return models if isinstance(models, list) else []
+
+    active_refs = _get_active_provider_connection_refs(user, provider)
+    return _fallback_models_for_provider(fallback_models, provider, active_refs)
+
+
 def _schedule_base_model_refresh(
-    cache_key: str, request: Request, user: Optional[UserModel]
+    cache_key: str,
+    request: Request,
+    user: Optional[UserModel],
+    fallback_models: Optional[list] = None,
 ) -> asyncio.Task[list]:
     existing = _base_model_refresh_tasks.get(cache_key)
     if existing and not existing.done():
         return existing
 
     async def _runner() -> list:
-        models = await _fetch_all_base_models(request, user=user)
+        models = await _fetch_all_base_models(
+            request, user=user, fallback_models=fallback_models
+        )
         now = time.time()
         _base_model_cache[cache_key] = (now, models)
+        _base_model_stale_fallback_cache.pop(cache_key, None)
         _evict_stale_base_model_cache(now)
         return models
 
@@ -140,7 +301,11 @@ def _schedule_base_model_refresh(
     return task
 
 
-async def _fetch_all_base_models(request: Request, user: UserModel = None):
+async def _fetch_all_base_models(
+    request: Request,
+    user: UserModel = None,
+    fallback_models: Optional[list] = None,
+):
     # Base models are now user-scoped (per-user connections). Provider routers return [] when
     # the user has no configured connections for that provider.
     # Fetch all providers in parallel and cap individual sources so one slow upstream
@@ -158,10 +323,13 @@ async def _fetch_all_base_models(request: Request, user: UserModel = None):
     )
 
     # Process openai
-    if not isinstance(openai_resp, dict):
-        openai_models = []
-    else:
-        openai_models = openai_resp.get("data", []) if isinstance(openai_resp, dict) else []
+    openai_models = _provider_models_or_fallback(
+        response=openai_resp,
+        provider="openai",
+        data_key="data",
+        fallback_models=fallback_models,
+        user=user,
+    )
 
     # Process ollama
     if isinstance(ollama_resp, dict) and "models" in ollama_resp:
@@ -204,23 +372,39 @@ async def _fetch_all_base_models(request: Request, user: UserModel = None):
             )
             ollama_models.append(entry)
     else:
-        ollama_models = []
+        ollama_models = _fallback_models_for_provider(
+            fallback_models,
+            "ollama",
+            _get_active_provider_connection_refs(user, "ollama"),
+        )
 
     # Process gemini
-    if not isinstance(gemini_resp, dict):
-        gemini_models = []
-    else:
-        gemini_models = gemini_resp.get("data", []) if isinstance(gemini_resp, dict) else []
+    gemini_models = _provider_models_or_fallback(
+        response=gemini_resp,
+        provider="gemini",
+        data_key="data",
+        fallback_models=fallback_models,
+        user=user,
+    )
 
     # Process anthropic
-    if not isinstance(anthropic_resp, dict):
-        anthropic_models = []
-    else:
-        anthropic_models = anthropic_resp.get("data", []) if isinstance(anthropic_resp, dict) else []
+    anthropic_models = _provider_models_or_fallback(
+        response=anthropic_resp,
+        provider="anthropic",
+        data_key="data",
+        fallback_models=fallback_models,
+        user=user,
+    )
 
     function_models = (
         function_models_resp if isinstance(function_models_resp, list) else []
     )
+    if not isinstance(function_models_resp, list):
+        function_models = _fallback_models_for_provider(
+            fallback_models,
+            "pipe",
+            active_refs=None,
+        )
     models = function_models + openai_models + ollama_models + gemini_models + anthropic_models
 
     return models
@@ -243,10 +427,14 @@ async def get_all_base_models(request: Request, user: UserModel = None):
         ts, models = cached
         if now - ts < _BASE_MODEL_CACHE_TTL:
             return models
-        _schedule_base_model_refresh(cache_key, request, user)
+        _schedule_base_model_refresh(cache_key, request, user, fallback_models=models)
         return models
 
-    return await _schedule_base_model_refresh(cache_key, request, user)
+    fallback = _base_model_stale_fallback_cache.get(cache_key)
+    fallback_models = fallback[1] if fallback else None
+    return await _schedule_base_model_refresh(
+        cache_key, request, user, fallback_models=fallback_models
+    )
 
 
 async def get_all_models(request, user: UserModel = None):

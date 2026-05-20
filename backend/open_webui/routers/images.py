@@ -8,7 +8,7 @@ import mimetypes
 import os
 import re
 import time
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 from urllib.parse import urlparse
 
 import aiohttp
@@ -72,6 +72,7 @@ COMFYUI_WORKFLOW_NODE_MAPPING_INVALID = (
 IMAGE_MODEL_DISCOVERY_CACHE_TTL_SECONDS = 60.0
 IMAGE_MODEL_DISCOVERY_CACHE_MAX_ENTRIES = 64
 IMAGE_MODEL_DISCOVERY_CACHE: dict[str, tuple[float, list[dict[str, Any]]]] = {}
+OPENAI_IMAGE_BATCH_SPLIT_CONCURRENCY = 2
 MARKDOWN_IMAGE_URL_RE = re.compile(r"!\[[^\]]*\]\(([^)]+)\)")
 DATA_IMAGE_URL_RE = re.compile(r"data:image\/[a-z0-9.+-]+;base64,[a-z0-9+/=\s]+", re.IGNORECASE)
 
@@ -4650,6 +4651,47 @@ def _resolve_image_input_as_data_url(
     return mime_type, image_bytes, f"data:{mime_type};base64,{encoded}"
 
 
+async def _run_openai_image_split_batch(
+    *,
+    route_label: str,
+    model_id: str,
+    n: int,
+    run_single: Callable[[int], Awaitable[list[dict[str, str]]]],
+) -> list[dict[str, str]]:
+    requested_n = max(1, int(n or 1))
+    if requested_n <= 1:
+        return await run_single(0)
+
+    concurrency = min(requested_n, OPENAI_IMAGE_BATCH_SPLIT_CONCURRENCY)
+    try:
+        log.info(
+            "openai_image_batch_split route=%s model=%s requested_n=%s concurrency=%s",
+            route_label,
+            model_id,
+            requested_n,
+            concurrency,
+        )
+    except Exception:
+        pass
+
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def run_guarded(index: int) -> list[dict[str, str]]:
+        async with semaphore:
+            return await run_single(index)
+
+    batch_results = await asyncio.gather(
+        *(run_guarded(index) for index in range(requested_n)),
+        return_exceptions=True,
+    )
+    images: list[dict[str, str]] = []
+    for result in batch_results:
+        if isinstance(result, BaseException):
+            raise result
+        images.extend(result)
+    return images
+
+
 async def _generate_via_openai_image_edits_endpoint(
     request: Request,
     user,
@@ -4662,6 +4704,29 @@ async def _generate_via_openai_image_edits_endpoint(
     background: Optional[str],
     source: dict[str, Any],
 ) -> list[dict[str, str]]:
+    requested_n = max(1, int(n or 1))
+    if requested_n > 1:
+        async def run_single(_index: int) -> list[dict[str, str]]:
+            return await _generate_via_openai_image_edits_endpoint(
+                request,
+                user,
+                model_id=model_id,
+                prompt=prompt,
+                image_url=image_url,
+                n=1,
+                size=size,
+                background=background,
+                source=source,
+            )
+
+        return await _run_openai_image_split_batch(
+            route_label="edits",
+            model_id=model_id,
+            n=requested_n,
+            run_single=run_single,
+        )
+
+    n = requested_n
     base_url = source.get("base_url") or ""
     api_key = source.get("key") or ""
     api_config = source.get("api_config") or {}
@@ -4818,6 +4883,28 @@ async def _generate_via_openai_images_endpoint(
     background: Optional[str],
     source: dict[str, Any],
 ) -> list[dict[str, str]]:
+    requested_n = max(1, int(n or 1))
+    if requested_n > 1:
+        async def run_single(_index: int) -> list[dict[str, str]]:
+            return await _generate_via_openai_images_endpoint(
+                request,
+                user,
+                model_id=model_id,
+                prompt=prompt,
+                n=1,
+                size=size,
+                background=background,
+                source=source,
+            )
+
+        return await _run_openai_image_split_batch(
+            route_label="generations",
+            model_id=model_id,
+            n=requested_n,
+            run_single=run_single,
+        )
+
+    n = requested_n
     base_url = source.get("base_url") or ""
     api_key = source.get("key") or ""
     api_config = source.get("api_config") or {}

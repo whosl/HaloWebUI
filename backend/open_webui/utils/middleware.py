@@ -905,6 +905,10 @@ _API_ERROR_FAMILY_CONFIG: dict[str, dict[str, Any]] = {
         "reasons": ["api_request_timeout"],
         "suggestion": "wait_retry",
     },
+    "upstream_response_lost": {
+        "reasons": ["api_response_disconnected", "proxy_error", "possible_upstream_billed"],
+        "suggestion": "check_upstream_before_retry",
+    },
     "upstream_service_error": {
         "reasons": ["api_upstream_error", "proxy_error"],
         "suggestion": "wait_retry",
@@ -1007,9 +1011,24 @@ def _resolve_api_error_status(
     return None
 
 
+def _is_api_response_disconnected_error(raw_message: str) -> bool:
+    text = (raw_message or "").lower()
+    return any(
+        marker in text
+        for marker in (
+            "server disconnected without sending a response",
+            "remote protocol error",
+            "connection closed before receiving response",
+            "peer closed connection without sending complete message body",
+        )
+    )
+
+
 def _classify_api_error_family(*, status: int | None, raw_message: str) -> str:
     text = (raw_message or "").lower()
 
+    if _is_api_response_disconnected_error(raw_message):
+        return "upstream_response_lost"
     if status in {401, 403}:
         return "auth_error"
     if status == 404:
@@ -1096,6 +1115,12 @@ def _build_api_error_title(*, family: str, status: int | None) -> str:
             if status
             else "上游服务响应超时，请求失败"
         )
+    if family == "upstream_response_lost":
+        return (
+            f"上游结果没有完整返回，请求失败（HTTP {status}）"
+            if status
+            else "上游结果没有完整返回，请求失败"
+        )
     return (
         f"上游服务返回错误，请求失败（HTTP {status}）"
         if status
@@ -1110,6 +1135,7 @@ def _build_api_error_body(*, family: str, evidence: dict[str, str]) -> str:
         "model_not_found": "上游没有找到当前模型或目标接口。请检查模型名、连接配置，或确认该模型在上游可用。",
         "rate_limited": "上游在短时间内拒绝了更多请求。通常与速率限制、额度或并发控制有关。",
         "timeout": "请求已发出，但上游在限定时间内没有完成响应。",
+        "upstream_response_lost": "请求已经发到模型服务，可能已经在上游完成或产生计费，但中转站/反代在把结果返回 HaloWebUI 前断开了。先查上游日志或计费记录，再决定是否重试，避免重复扣费。",
         "upstream_service_error": "上游服务返回了异常响应。问题可能来自上游服务本身、代理转发，或当前请求与上游能力不完全匹配。",
     }
 

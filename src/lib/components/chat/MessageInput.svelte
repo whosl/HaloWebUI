@@ -90,6 +90,7 @@
 	import ToolServersModal from './ToolServersModal.svelte';
 	import Wrench from '../icons/Wrench.svelte';
 	import Sparkles from '../icons/Sparkles.svelte';
+	import { Image as ImageIcon } from 'lucide-svelte';
 
 	const i18n = getContext('i18n');
 
@@ -432,14 +433,18 @@
 		webSearchModeSource = 'user';
 	};
 
-	const openImageGenerationPanel = () => {
-		imageGenerationEnabled = true;
-		imageGenerationPanelOpen = true;
+	const disableImageGeneration = () => {
+		imageGenerationEnabled = false;
+		imageGenerationPanelOpen = false;
 	};
 
 	afterUpdate(() => {
 		syncWebSearchModeWithOptions();
 	});
+
+	$: if (!imageGenerationEnabled && imageGenerationPanelOpen) {
+		imageGenerationPanelOpen = false;
+	}
 
 	$: currentWebSearchTooltip = (() => {
 		switch (normalizedWebSearchMode) {
@@ -461,16 +466,23 @@
 		'group shrink-0 rounded-full flex items-center border transition-colors duration-200 cursor-pointer bg-sky-50/90 hover:bg-sky-100/85 dark:bg-slate-800/70 dark:hover:bg-slate-800/90 border-sky-200/60 dark:border-sky-500/20';
 	const webSearchBadgeClass = `${featureBadgeBaseClass} px-2.5 py-1.5 gap-1.5`;
 	const compactFeatureBadgeClass = `${featureBadgeBaseClass} px-1.5 py-1.5 gap-1`;
+	const imageGenerationBadgeBaseClass =
+		'group shrink-0 rounded-full flex items-center border transition-colors duration-200 cursor-pointer bg-teal-50/90 hover:bg-teal-100/85 dark:bg-teal-500/15 dark:hover:bg-teal-500/20 border-teal-200/80 dark:border-teal-400/25';
+	const imageGenerationBadgeClass = `${imageGenerationBadgeBaseClass} px-2.5 py-1.5 gap-1.5`;
 	const featureBadgeLabelClass =
 		'whitespace-nowrap text-slate-600 dark:text-slate-200 text-xs font-medium leading-none';
+	const imageGenerationBadgeLabelClass =
+		'whitespace-nowrap text-teal-700 dark:text-teal-100 text-xs font-medium leading-none';
 	const featureBadgeIconSlotClass = 'relative flex size-4 items-center justify-center';
 	const featureBadgePrimaryIconMotionClass =
 		'transition-all duration-200 ease-out group-hover:scale-75 group-hover:opacity-0 group-focus:scale-75 group-focus:opacity-0';
 	const featureBadgeCloseIconMotionClass =
 		'absolute inset-0 m-auto size-3 scale-75 opacity-0 transition-all duration-200 ease-out group-hover:scale-100 group-hover:opacity-100 group-focus:scale-100 group-focus:opacity-100';
 	const webSearchIconClass = 'size-4 text-sky-500 dark:text-sky-300';
+	const imageGenerationIconClass = 'size-4 text-teal-600 dark:text-teal-200';
 	const codeInterpreterIconClass = 'size-4 text-violet-500 dark:text-violet-300';
 	const webSearchCloseIconClass = `${featureBadgeCloseIconMotionClass} text-sky-600 dark:text-sky-300`;
+	const imageGenerationCloseIconClass = `${featureBadgeCloseIconMotionClass} text-teal-700 dark:text-teal-200`;
 	const codeInterpreterCloseIconClass = `${featureBadgeCloseIconMotionClass} text-violet-600 dark:text-violet-300`;
 
 	let showTools = false;
@@ -1668,7 +1680,6 @@
 											{webSearchModeOptions}
 											onWebSearchModeChange={setWebSearchModeFromUser}
 											bind:imageGenerationEnabled
-											onImageGenerationPanelOpen={openImageGenerationPanel}
 											bind:codeInterpreterEnabled
 											{screenCaptureHandler}
 											{inputFilesHandler}
@@ -1735,7 +1746,30 @@
 											</button>
 										</InputMenu>
 
-										{#if $config?.features?.enable_image_generation && ($_user.role === 'admin' || $_user?.permissions?.features?.image_generation)}
+										{#if $config?.features?.enable_image_generation && ($_user.role === 'admin' || $_user?.permissions?.features?.image_generation) && imageGenerationEnabled}
+											<Tooltip
+												content={tr('图片生成已开启，点击关闭', 'Image generation is on. Click to disable')}
+												placement="top"
+											>
+												<button
+													type="button"
+													class={imageGenerationBadgeClass}
+													aria-label={tr('关闭图片生成', 'Disable image generation')}
+													on:click={disableImageGeneration}
+												>
+													<span class={featureBadgeIconSlotClass}>
+														<ImageIcon
+															class={`${imageGenerationIconClass} ${featureBadgePrimaryIconMotionClass}`}
+															strokeWidth={1.9}
+														/>
+														<XMark className={imageGenerationCloseIconClass} strokeWidth="2.5" />
+													</span>
+													<span class={imageGenerationBadgeLabelClass}>
+														{tr('图片', 'Image')}
+													</span>
+												</button>
+											</Tooltip>
+
 											<ImageGenerationPanel
 												bind:open={imageGenerationPanelOpen}
 												bind:prompt

@@ -287,6 +287,62 @@ def test_generate_via_openai_images_endpoint_uses_configured_size(monkeypatch):
     assert captured["json_body"]["size"] == "1024x1024"
 
 
+def test_generate_via_openai_images_endpoint_splits_batch_into_single_requests(monkeypatch):
+    calls = []
+
+    async def fake_send(**kwargs):
+        calls.append(kwargs)
+        image_bytes = f"generated-{len(calls)}".encode("utf-8")
+        return {
+            "status": 200,
+            "headers": {"content-type": "application/json"},
+            "response_body": json.dumps(
+                {
+                    "data": [
+                        {
+                            "b64_json": base64.b64encode(image_bytes).decode("utf-8")
+                        }
+                    ]
+                }
+            ),
+        }
+
+    monkeypatch.setattr(images_router, "_send_openai_image_request", fake_send)
+    monkeypatch.setattr(
+        images_router,
+        "upload_image",
+        lambda request, payload, image_data, content_type, user: (
+            f"/images/{image_data.decode('utf-8')}.png"
+        ),
+    )
+
+    result = asyncio.run(
+        images_router._generate_via_openai_images_endpoint(
+            request=SimpleNamespace(),
+            user=_make_user(),
+            model_id="gpt-image-2",
+            prompt="生成三张图",
+            n=3,
+            size="1024x1024",
+            background=None,
+            source={
+                "base_url": "https://api.openai.com/v1",
+                "key": "sk-test",
+                "api_config": {},
+            },
+        )
+    )
+
+    assert len(calls) == 3
+    assert [call["json_body"]["n"] for call in calls] == [1, 1, 1]
+    assert all(call["json_body"]["size"] == "1024x1024" for call in calls)
+    assert result == [
+        {"url": "/images/generated-1.png"},
+        {"url": "/images/generated-2.png"},
+        {"url": "/images/generated-3.png"},
+    ]
+
+
 def test_generate_via_openai_images_endpoint_uses_b64_response_format_for_dalle(monkeypatch):
     captured = {}
 
@@ -486,6 +542,69 @@ def test_generate_via_openai_image_edits_endpoint_uses_native_request(monkeypatc
     assert captured["files"][0]["mime"] == "image/png"
     assert captured["files"][0]["data"] == b"source"
     assert result == [{"url": "/images/edited.png"}]
+
+
+def test_generate_via_openai_image_edits_endpoint_splits_batch_into_single_requests(monkeypatch):
+    calls = []
+
+    async def fake_send(**kwargs):
+        calls.append(kwargs)
+        image_bytes = f"edited-{len(calls)}".encode("utf-8")
+        return {
+            "status": 200,
+            "headers": {"content-type": "application/json"},
+            "response_body": json.dumps(
+                {
+                    "data": [
+                        {
+                            "b64_json": base64.b64encode(image_bytes).decode("utf-8")
+                        }
+                    ]
+                }
+            ),
+        }
+
+    monkeypatch.setattr(images_router, "_send_openai_image_request", fake_send)
+    monkeypatch.setattr(
+        images_router,
+        "upload_image",
+        lambda request, payload, image_data, content_type, user: (
+            f"/images/{image_data.decode('utf-8')}.png"
+        ),
+    )
+
+    request = SimpleNamespace(
+        base_url="https://example.com/",
+        state=SimpleNamespace(token=None),
+    )
+    image_url = "data:image/png;base64," + base64.b64encode(b"source").decode("utf-8")
+
+    result = asyncio.run(
+        images_router._generate_via_openai_image_edits_endpoint(
+            request=request,
+            user=_make_user(),
+            model_id="gpt-image-2",
+            prompt="把猫改成黑白奶牛猫，生成两张",
+            image_url=image_url,
+            n=2,
+            size="1536x1024",
+            background=None,
+            source={
+                "base_url": "https://api.openai.com/v1",
+                "key": "sk-test",
+                "api_config": {},
+            },
+        )
+    )
+
+    assert len(calls) == 2
+    assert [call["form_fields"]["n"] for call in calls] == [1, 1]
+    assert all(call["form_fields"]["size"] == "1536x1024" for call in calls)
+    assert all(call["files"][0]["field_name"] == "image" for call in calls)
+    assert result == [
+        {"url": "/images/edited-1.png"},
+        {"url": "/images/edited-2.png"},
+    ]
 
 
 def test_generate_via_openai_image_edits_endpoint_strips_connection_prefix(monkeypatch):

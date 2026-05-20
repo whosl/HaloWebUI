@@ -38,6 +38,7 @@
 	import {
 		Check,
 		CircleHelp,
+		ChevronDown,
 		Image as ImageIcon,
 		SlidersHorizontal,
 		Sparkles,
@@ -743,7 +744,6 @@
 			)?.id ?? 'auto'
 		);
 	})();
-
 	$: currentCount = Math.max(1, Math.min(Number(imageGenerationOptions?.n ?? 1) || 1, 4));
 	$: currentBackground = `${imageGenerationOptions?.background ?? ''}`;
 	$: currentSteps = Math.max(0, Math.min(Number(imageGenerationOptions?.steps ?? 0) || 0, 80));
@@ -780,26 +780,21 @@
 </script>
 
 <DropdownMenu.Root bind:open closeFocus={false} typeahead={false} onOpenChange={handleOpenChange}>
-	<Tooltip
-		content={imageGenerationEnabled
-			? tr('图片生成已开启，点击调整', 'Image generation is on. Click to adjust.')
-			: tr('图片生成', 'Image generation')}
-		placement="top"
-	>
-		<DropdownMenu.Trigger
-			class="relative flex h-8 shrink-0 items-center justify-center rounded-full border transition
-					{imageGenerationEnabled
-				? 'gap-1.5 border-teal-200 bg-teal-50 px-2.5 text-teal-700 hover:bg-teal-100 dark:border-teal-500/30 dark:bg-teal-500/15 dark:text-teal-100'
-				: 'w-8 border-transparent bg-transparent text-gray-700 hover:bg-gray-100 dark:text-gray-200 dark:hover:bg-gray-800'}"
-			aria-label={tr('图片生成设置', 'Image generation settings')}
-			aria-pressed={imageGenerationEnabled}
-		>
-			<Wand2 class="size-4" strokeWidth={1.9} />
-			{#if imageGenerationEnabled}
-				<span class="pr-0.5 text-xs font-medium leading-none">{tr('绘图', 'Draw')}</span>
-			{/if}
-		</DropdownMenu.Trigger>
-	</Tooltip>
+	{#if imageGenerationEnabled || open}
+		<Tooltip content={tr('打开参数设置', 'Open generation settings')} placement="top">
+			<DropdownMenu.Trigger
+				class="flex h-8 shrink-0 items-center gap-1.5 rounded-full border border-gray-200 bg-gray-100/90 px-2.5 text-sm font-medium leading-none text-gray-700 transition hover:bg-gray-200/80 dark:border-gray-700 dark:bg-gray-800/80 dark:text-gray-100 dark:hover:bg-gray-700"
+				aria-label={tr('参数设置', 'Generation settings')}
+				aria-pressed={open}
+			>
+				<span class="flex size-4 shrink-0 items-center justify-center text-gray-700 dark:text-gray-100">
+					<SlidersHorizontal class="size-4" strokeWidth={2} />
+				</span>
+				<span class="max-w-[5rem] truncate">{tr('参数设置', 'Settings')}</span>
+				<ChevronDown class="size-3.5 shrink-0 text-gray-500 dark:text-gray-300" strokeWidth={2.1} />
+			</DropdownMenu.Trigger>
+		</Tooltip>
+	{/if}
 
 	<DropdownMenu.Content
 		class="z-50 w-[42rem] max-w-[calc(100vw-1.5rem)] overflow-hidden rounded-2xl border border-gray-200/80 bg-white text-gray-900 shadow-2xl outline-none dark:border-gray-700/70 dark:bg-gray-900 dark:text-gray-100"
@@ -935,9 +930,9 @@
 						<div
 							class="flex items-center gap-1.5 text-xs font-semibold text-gray-500 dark:text-gray-400"
 						>
-							<Sparkles class="size-3.5" strokeWidth={1.9} />
-							{tr('灵感模板', 'Prompt templates')}
-						</div>
+								<Sparkles class="size-3.5" strokeWidth={1.9} />
+								{tr('创作灵感', 'Inspiration')}
+							</div>
 						<div class="grid gap-2 sm:grid-cols-3">
 							{#each ideaPresets as preset}
 								<button
