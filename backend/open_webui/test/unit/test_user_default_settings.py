@@ -18,6 +18,7 @@ def test_new_user_default_settings_sanitizes_unsafe_fields():
                 "notifications": {"webhook_url": "https://example.test/hook"},
                 "userLocation": True,
                 "notificationEnabled": True,
+                "highlighterTheme": "github-dark",
                 "speechAutoSend": True,
                 "responseAutoPlayback": True,
                 "showEmojiInCall": True,
@@ -26,6 +27,19 @@ def test_new_user_default_settings_sanitizes_unsafe_fields():
                 "iframeSandboxAllowForms": True,
                 "hapticFeedback": True,
                 "mermaidTheme": "lobe-theme",
+                "chatDirection": "RTL",
+                "transitionMode": "smooth",
+                "textScale": 1.2,
+                "scrollOnBranchChange": True,
+                "enableMessageQueue": True,
+                "showFormulaQuickCopyButton": True,
+                "regenerateMenu": True,
+                "renderMarkdownInPreviews": True,
+                "stylizedPdfExport": True,
+                "memory": True,
+                "imageCompression": True,
+                "imageCompressionInChannels": True,
+                "imageCompressionSize": {"width": 1600, "height": 900},
                 "title": {"auto": False, "prompt": "private prompt"},
                 "audio": {
                     "stt": {"engine": "web", "language": "zh-CN"},
@@ -54,12 +68,16 @@ def test_new_user_default_settings_sanitizes_unsafe_fields():
     assert "pinnedModels" not in sanitized["ui"]
     assert "modelSelectorTagOrder" not in sanitized["ui"]
     assert "landingPageMode" not in sanitized["ui"]
-    assert sanitized["ui"]["mermaidTheme"] == "lobe-theme"
     assert sanitized["ui"]["title"] == {"auto": False}
     assert "connections" not in sanitized["ui"]
     assert "notifications" not in sanitized["ui"]
     assert "userLocation" not in sanitized["ui"]
     assert "notificationEnabled" not in sanitized["ui"]
+    assert "highlighterTheme" not in sanitized["ui"]
+    assert "mermaidTheme" not in sanitized["ui"]
+    assert "chatDirection" not in sanitized["ui"]
+    assert "transitionMode" not in sanitized["ui"]
+    assert "textScale" not in sanitized["ui"]
     assert "speechAutoSend" not in sanitized["ui"]
     assert "responseAutoPlayback" not in sanitized["ui"]
     assert "showEmojiInCall" not in sanitized["ui"]
@@ -68,10 +86,17 @@ def test_new_user_default_settings_sanitizes_unsafe_fields():
     assert "iframeSandboxAllowForms" not in sanitized["ui"]
     assert "hapticFeedback" not in sanitized["ui"]
     assert "audio" not in sanitized["ui"]
-    assert sanitized["tools"]["native_tools"]["TOOL_CALLING_MODE"] == "native"
-    assert sanitized["tools"]["native_tools"]["MAX_TOOL_CALL_ROUNDS"] == 30
-    assert sanitized["tools"]["native_tools"]["ENABLE_WEB_SEARCH_TOOL"] is False
-    assert "mcp_server_connections" not in sanitized["tools"]["native_tools"]
+    assert "scrollOnBranchChange" not in sanitized["ui"]
+    assert "enableMessageQueue" not in sanitized["ui"]
+    assert "showFormulaQuickCopyButton" not in sanitized["ui"]
+    assert "regenerateMenu" not in sanitized["ui"]
+    assert "renderMarkdownInPreviews" not in sanitized["ui"]
+    assert "stylizedPdfExport" not in sanitized["ui"]
+    assert "memory" not in sanitized["ui"]
+    assert "imageCompression" not in sanitized["ui"]
+    assert "imageCompressionInChannels" not in sanitized["ui"]
+    assert "imageCompressionSize" not in sanitized["ui"]
+    assert sanitized["tools"]["native_tools"] == {}
 
 
 def test_new_user_default_settings_auto_enables_when_template_has_content():
@@ -151,12 +176,6 @@ def test_new_user_default_settings_builds_for_new_non_admin_accounts():
         "ui": {
             "models": ["gpt-4o"],
             "temporaryChatByDefault": True,
-        },
-        "tools": {
-            "native_tools": {
-                "TOOL_CALLING_MODE": "native",
-                "ENABLE_WEB_SEARCH_TOOL": False,
-            }
         },
         "revision": 0,
     }

@@ -15,6 +15,20 @@ describe('user default settings helpers', () => {
 			system: 'You are helpful.',
 			title: { auto: false, prompt: 'private title prompt' },
 			imageCompressionSize: { width: 1600, height: 900 },
+			highlighterTheme: 'github-dark',
+			mermaidTheme: 'lobe-theme',
+			chatDirection: 'RTL',
+			transitionMode: 'smooth',
+			textScale: 1.2,
+			scrollOnBranchChange: true,
+			enableMessageQueue: true,
+			showFormulaQuickCopyButton: true,
+			regenerateMenu: true,
+			renderMarkdownInPreviews: true,
+			stylizedPdfExport: true,
+			memory: true,
+			imageCompression: true,
+			imageCompressionInChannels: true,
 			landingPageMode: 'chat',
 			pinnedModels: ['gpt-4.1'],
 			modelSelectorTagOrder: ['OpenAI'],
@@ -33,9 +47,23 @@ describe('user default settings helpers', () => {
 			temporaryChatByDefault: true,
 			showInlineCitations: false,
 			system: 'You are helpful.',
-			title: { auto: false },
-			imageCompressionSize: { width: '1600', height: '900' }
+			title: { auto: false }
 		});
+		expect(picked).not.toHaveProperty('imageCompressionSize');
+		expect(picked).not.toHaveProperty('highlighterTheme');
+		expect(picked).not.toHaveProperty('mermaidTheme');
+		expect(picked).not.toHaveProperty('chatDirection');
+		expect(picked).not.toHaveProperty('transitionMode');
+		expect(picked).not.toHaveProperty('textScale');
+		expect(picked).not.toHaveProperty('scrollOnBranchChange');
+		expect(picked).not.toHaveProperty('enableMessageQueue');
+		expect(picked).not.toHaveProperty('showFormulaQuickCopyButton');
+		expect(picked).not.toHaveProperty('regenerateMenu');
+		expect(picked).not.toHaveProperty('renderMarkdownInPreviews');
+		expect(picked).not.toHaveProperty('stylizedPdfExport');
+		expect(picked).not.toHaveProperty('memory');
+		expect(picked).not.toHaveProperty('imageCompression');
+		expect(picked).not.toHaveProperty('imageCompressionInChannels');
 		expect(picked).not.toHaveProperty('landingPageMode');
 		expect(picked).not.toHaveProperty('pinnedModels');
 		expect(picked).not.toHaveProperty('modelSelectorTagOrder');
@@ -70,10 +98,7 @@ describe('user default settings helpers', () => {
 			models: ['gpt-4o'],
 			temporaryChatByDefault: true
 		});
-		expect(payload.tools.native_tools).toEqual({
-			TOOL_CALLING_MODE: 'native',
-			ENABLE_WEB_SEARCH_TOOL: false
-		});
+		expect(payload.tools.native_tools).toEqual({});
 	});
 
 	it('preserves the configured marker for an intentionally empty preset', () => {

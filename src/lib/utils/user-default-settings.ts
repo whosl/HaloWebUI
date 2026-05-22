@@ -1,9 +1,4 @@
 import type { NewUserDefaultSettingsPayload } from '$lib/apis/users';
-import {
-	DEFAULT_CHAT_TRANSITION_MODE,
-	DEFAULT_HIGHLIGHTER_THEME,
-	DEFAULT_MERMAID_THEME
-} from '$lib/utils/lobehub-chat-appearance';
 
 type UserDefaultUiTemplate = {
 	models: string[];
@@ -12,12 +7,7 @@ type UserDefaultUiTemplate = {
 	chatBubble: boolean;
 	showUsername: boolean;
 	widescreenMode: boolean;
-	chatDirection: 'auto' | 'LTR' | 'RTL';
 	notificationSound: boolean;
-	highlighterTheme: string;
-	mermaidTheme: string;
-	textScale: number | null;
-	transitionMode: 'none' | 'fadeIn' | 'smooth';
 	enableAutoScrollOnStreaming: boolean;
 	richTextInput: boolean;
 	promptAutocomplete: boolean;
@@ -33,23 +23,17 @@ type UserDefaultUiTemplate = {
 	detectArtifacts: boolean;
 	svgPreviewAutoOpen: boolean;
 	responseAutoCopy: boolean;
-	scrollOnBranchChange: boolean;
-	enableMessageQueue: boolean;
 	temporaryChatByDefault: boolean;
 	newChatInheritsPreviousState: boolean;
 	collapseCodeBlocks: boolean;
 	collapseHistoricalLongResponses: boolean;
 	showInlineCitations: boolean;
 	showMessageOutline: boolean;
-	showFormulaQuickCopyButton: boolean;
 	expandDetails: boolean;
 	insertSuggestionPrompt: boolean;
 	keepFollowUpPrompts: boolean;
 	insertFollowUpPrompt: boolean;
-	regenerateMenu: boolean;
-	renderMarkdownInPreviews: boolean;
 	displayMultiModelResponsesInTabs: boolean;
-	stylizedPdfExport: boolean;
 	showFloatingActionButtons: boolean;
 	floatingActionButtons:
 		| {
@@ -59,59 +43,11 @@ type UserDefaultUiTemplate = {
 				prompt: string;
 		  }[]
 		| null;
-	memory: boolean;
-	imageCompression: boolean;
-	imageCompressionSize: { width: string; height: string };
-	imageCompressionInChannels: boolean;
 };
 
 export type UserDefaultUiBoolKey = {
 	[K in keyof UserDefaultUiTemplate]: UserDefaultUiTemplate[K] extends boolean ? K : never;
 }[keyof UserDefaultUiTemplate];
-
-export type NativeToolBoolKey =
-	| 'ENABLE_INTERLEAVED_THINKING'
-	| 'ENABLE_WEB_SEARCH_TOOL'
-	| 'ENABLE_URL_FETCH'
-	| 'ENABLE_URL_FETCH_RENDERED'
-	| 'ENABLE_LIST_KNOWLEDGE_BASES'
-	| 'ENABLE_SEARCH_KNOWLEDGE_BASES'
-	| 'ENABLE_QUERY_KNOWLEDGE_FILES'
-	| 'ENABLE_VIEW_KNOWLEDGE_FILE'
-	| 'ENABLE_IMAGE_GENERATION_TOOL'
-	| 'ENABLE_IMAGE_EDIT'
-	| 'ENABLE_MEMORY_TOOLS'
-	| 'ENABLE_NOTES'
-	| 'ENABLE_CHAT_HISTORY_TOOLS'
-	| 'ENABLE_TIME_TOOLS'
-	| 'ENABLE_CHANNEL_TOOLS'
-	| 'ENABLE_TERMINAL_TOOL';
-
-type NativeToolsTemplate = Record<NativeToolBoolKey, boolean> & {
-	TOOL_CALLING_MODE: 'default' | 'native' | 'off';
-	MAX_TOOL_CALL_ROUNDS: number;
-};
-
-export const DEFAULT_NATIVE_TOOLS_TEMPLATE: NativeToolsTemplate = {
-	TOOL_CALLING_MODE: 'default',
-	ENABLE_INTERLEAVED_THINKING: false,
-	MAX_TOOL_CALL_ROUNDS: 15,
-	ENABLE_WEB_SEARCH_TOOL: true,
-	ENABLE_URL_FETCH: true,
-	ENABLE_URL_FETCH_RENDERED: false,
-	ENABLE_LIST_KNOWLEDGE_BASES: true,
-	ENABLE_SEARCH_KNOWLEDGE_BASES: true,
-	ENABLE_QUERY_KNOWLEDGE_FILES: true,
-	ENABLE_VIEW_KNOWLEDGE_FILE: true,
-	ENABLE_IMAGE_GENERATION_TOOL: true,
-	ENABLE_IMAGE_EDIT: false,
-	ENABLE_MEMORY_TOOLS: true,
-	ENABLE_NOTES: false,
-	ENABLE_CHAT_HISTORY_TOOLS: true,
-	ENABLE_TIME_TOOLS: true,
-	ENABLE_CHANNEL_TOOLS: true,
-	ENABLE_TERMINAL_TOOL: false
-};
 
 export const DEFAULT_USER_DEFAULT_UI_TEMPLATE: UserDefaultUiTemplate = {
 	models: [],
@@ -120,12 +56,7 @@ export const DEFAULT_USER_DEFAULT_UI_TEMPLATE: UserDefaultUiTemplate = {
 	chatBubble: true,
 	showUsername: false,
 	widescreenMode: false,
-	chatDirection: 'auto',
 	notificationSound: true,
-	highlighterTheme: DEFAULT_HIGHLIGHTER_THEME,
-	mermaidTheme: DEFAULT_MERMAID_THEME,
-	textScale: null,
-	transitionMode: DEFAULT_CHAT_TRANSITION_MODE,
 	enableAutoScrollOnStreaming: true,
 	richTextInput: true,
 	promptAutocomplete: false,
@@ -141,29 +72,19 @@ export const DEFAULT_USER_DEFAULT_UI_TEMPLATE: UserDefaultUiTemplate = {
 	detectArtifacts: true,
 	svgPreviewAutoOpen: true,
 	responseAutoCopy: false,
-	scrollOnBranchChange: true,
-	enableMessageQueue: true,
 	temporaryChatByDefault: false,
 	newChatInheritsPreviousState: false,
 	collapseCodeBlocks: false,
 	collapseHistoricalLongResponses: true,
 	showInlineCitations: true,
 	showMessageOutline: true,
-	showFormulaQuickCopyButton: true,
 	expandDetails: false,
 	insertSuggestionPrompt: false,
 	keepFollowUpPrompts: false,
 	insertFollowUpPrompt: false,
-	regenerateMenu: true,
-	renderMarkdownInPreviews: true,
 	displayMultiModelResponsesInTabs: false,
-	stylizedPdfExport: true,
 	showFloatingActionButtons: true,
-	floatingActionButtons: null,
-	memory: false,
-	imageCompression: false,
-	imageCompressionSize: { width: '', height: '' },
-	imageCompressionInChannels: true
+	floatingActionButtons: null
 };
 
 const UI_BOOL_KEYS: UserDefaultUiBoolKey[] = [
@@ -186,66 +107,27 @@ const UI_BOOL_KEYS: UserDefaultUiBoolKey[] = [
 	'detectArtifacts',
 	'svgPreviewAutoOpen',
 	'responseAutoCopy',
-	'scrollOnBranchChange',
-	'enableMessageQueue',
 	'temporaryChatByDefault',
 	'newChatInheritsPreviousState',
 	'collapseCodeBlocks',
 	'collapseHistoricalLongResponses',
 	'showInlineCitations',
 	'showMessageOutline',
-	'showFormulaQuickCopyButton',
 	'expandDetails',
 	'insertSuggestionPrompt',
 	'keepFollowUpPrompts',
 	'insertFollowUpPrompt',
-	'regenerateMenu',
-	'renderMarkdownInPreviews',
 	'displayMultiModelResponsesInTabs',
-	'stylizedPdfExport',
-	'showFloatingActionButtons',
-	'memory',
-	'imageCompression',
-	'imageCompressionInChannels'
+	'showFloatingActionButtons'
 ];
 
-const UI_STRING_KEYS = [
-	'highlighterTheme',
-	'mermaidTheme',
-	'chatDirection',
-	'transitionMode',
-	'system'
-];
+const UI_STRING_KEYS = ['system'];
 
 const UI_ARRAY_KEYS = ['models'];
-const NATIVE_TOOL_BOOL_KEYS: NativeToolBoolKey[] = [
-	'ENABLE_INTERLEAVED_THINKING',
-	'ENABLE_WEB_SEARCH_TOOL',
-	'ENABLE_URL_FETCH',
-	'ENABLE_URL_FETCH_RENDERED',
-	'ENABLE_LIST_KNOWLEDGE_BASES',
-	'ENABLE_SEARCH_KNOWLEDGE_BASES',
-	'ENABLE_QUERY_KNOWLEDGE_FILES',
-	'ENABLE_VIEW_KNOWLEDGE_FILE',
-	'ENABLE_IMAGE_GENERATION_TOOL',
-	'ENABLE_IMAGE_EDIT',
-	'ENABLE_MEMORY_TOOLS',
-	'ENABLE_NOTES',
-	'ENABLE_CHAT_HISTORY_TOOLS',
-	'ENABLE_TIME_TOOLS',
-	'ENABLE_CHANNEL_TOOLS',
-	'ENABLE_TERMINAL_TOOL'
-];
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value));
 const asRecord = (value: unknown): Record<string, any> =>
 	value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, any>) : {};
-
-const clampToolRounds = (value: unknown) => {
-	const parsed = Number(value);
-	if (!Number.isFinite(parsed)) return 15;
-	return Math.min(30, Math.max(1, Math.round(parsed)));
-};
 
 const isEqual = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
@@ -262,10 +144,7 @@ export const normalizeNewUserDefaultSettings = (
 ) => {
 	const raw = asRecord(value);
 	const rawUi = asRecord(raw.ui);
-	const rawTools = asRecord(raw.tools);
-	const rawNativeTools = asRecord(rawTools.native_tools);
 	const defaults = clone(DEFAULT_USER_DEFAULT_UI_TEMPLATE);
-	const nativeDefaults = clone(DEFAULT_NATIVE_TOOLS_TEMPLATE);
 
 	return {
 		configured: Boolean(raw.configured),
@@ -280,24 +159,9 @@ export const normalizeNewUserDefaultSettings = (
 			title: {
 				...defaults.title,
 				...asRecord(rawUi.title)
-			},
-			imageCompressionSize: {
-				...defaults.imageCompressionSize,
-				...asRecord(rawUi.imageCompressionSize)
 			}
 		},
-		tools: {
-			native_tools: {
-				...nativeDefaults,
-				...rawNativeTools,
-				TOOL_CALLING_MODE: ['default', 'native', 'off'].includes(rawNativeTools.TOOL_CALLING_MODE)
-					? rawNativeTools.TOOL_CALLING_MODE
-					: nativeDefaults.TOOL_CALLING_MODE,
-				MAX_TOOL_CALL_ROUNDS: clampToolRounds(
-					rawNativeTools.MAX_TOOL_CALL_ROUNDS ?? nativeDefaults.MAX_TOOL_CALL_ROUNDS
-				)
-			}
-		}
+		tools: { native_tools: {} }
 	};
 };
 
@@ -318,20 +182,8 @@ export const pickUserDefaultUiFields = (ui: Record<string, any>) => {
 			picked[key] = source[key].filter((item) => typeof item === 'string');
 	}
 
-	if ('textScale' in source) {
-		picked.textScale = source.textScale === null ? null : Number(source.textScale);
-	}
-
 	if (source.title && typeof source.title.auto === 'boolean') {
 		picked.title = { auto: source.title.auto };
-	}
-
-	if (source.imageCompressionSize) {
-		const size = asRecord(source.imageCompressionSize);
-		picked.imageCompressionSize = {
-			width: size.width === undefined || size.width === null ? '' : String(size.width),
-			height: size.height === undefined || size.height === null ? '' : String(size.height)
-		};
 	}
 
 	if ('floatingActionButtons' in source) {
@@ -359,32 +211,11 @@ export const buildNewUserDefaultSettingsPayload = (
 		}
 	}
 
-	const native = asRecord(value.tools.native_tools);
-	const nativeTools: Record<string, any> = {};
-
-	if (
-		['default', 'native', 'off'].includes(native.TOOL_CALLING_MODE) &&
-		native.TOOL_CALLING_MODE !== DEFAULT_NATIVE_TOOLS_TEMPLATE.TOOL_CALLING_MODE
-	) {
-		nativeTools.TOOL_CALLING_MODE = native.TOOL_CALLING_MODE;
-	}
-	if (
-		clampToolRounds(native.MAX_TOOL_CALL_ROUNDS) !==
-		DEFAULT_NATIVE_TOOLS_TEMPLATE.MAX_TOOL_CALL_ROUNDS
-	) {
-		nativeTools.MAX_TOOL_CALL_ROUNDS = clampToolRounds(native.MAX_TOOL_CALL_ROUNDS);
-	}
-	for (const key of NATIVE_TOOL_BOOL_KEYS) {
-		if (Boolean(native[key]) !== DEFAULT_NATIVE_TOOLS_TEMPLATE[key]) {
-			nativeTools[key] = Boolean(native[key]);
-		}
-	}
-
 	return {
 		configured: Boolean(value.configured),
 		enabled: Boolean(value.enabled),
 		roles: value.roles.filter((role) => role === 'user' || role === 'pending'),
 		ui,
-		tools: { native_tools: nativeTools }
+		tools: { native_tools: {} }
 	};
 };

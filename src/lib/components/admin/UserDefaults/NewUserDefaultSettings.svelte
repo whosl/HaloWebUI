@@ -3,7 +3,7 @@
 	import type { ComponentType } from 'svelte';
 	import type { Writable } from 'svelte/store';
 	import { toast } from 'svelte-sonner';
-	import { MessageCircleMore, PanelTop, UserCog, Wrench } from 'lucide-svelte';
+	import { MessageCircleMore, PanelTop, UserCog } from 'lucide-svelte';
 
 	import { models, settings, user } from '$lib/stores';
 	import {
@@ -12,7 +12,6 @@
 		updateNewUserDefaultSettings,
 		type NewUserDefaultSettingsPayload
 	} from '$lib/apis/users';
-	import { getNativeToolsConfig } from '$lib/apis/configs';
 	import { ensureModels } from '$lib/services/models';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import { getModelSelectionId } from '$lib/utils/model-identity';
@@ -23,10 +22,8 @@
 		createEmptyNewUserDefaultSettings,
 		normalizeNewUserDefaultSettings,
 		pickUserDefaultUiFields,
-		type NativeToolBoolKey,
 		type UserDefaultUiBoolKey
 	} from '$lib/utils/user-default-settings';
-	import { LOBE_HIGHLIGHTER_THEMES, LOBE_MERMAID_THEMES } from '$lib/utils/lobehub-chat-appearance';
 
 	import HaloSelect from '$lib/components/common/HaloSelect.svelte';
 	import InlineDirtyActions from '$lib/components/admin/Settings/InlineDirtyActions.svelte';
@@ -44,7 +41,7 @@
 		key: Key;
 		description: string;
 	};
-	type SectionKey = 'chat' | 'interface' | 'tools';
+	type SectionKey = 'chat' | 'interface';
 
 	let loading = true;
 	let saving = false;
@@ -54,14 +51,13 @@
 
 	let openSections = {
 		chat: true,
-		interface: true,
-		tools: false
+		interface: true
 	};
 	let activeSection: SectionKey = 'chat';
 
 	$: payload = buildNewUserDefaultSettingsPayload(draft);
 	$: dirty = !isSettingsSnapshotEqual(payload, initialPayload);
-	const sectionOrder: SectionKey[] = ['chat', 'interface', 'tools'];
+	const sectionOrder: SectionKey[] = ['chat', 'interface'];
 	const pageMeta = {
 		title: tr('账户预设', 'Account Presets'),
 		description: tr(
@@ -95,22 +91,12 @@
 		interface: {
 			title: tr('界面与输入', 'Interface and Input'),
 			description: tr(
-				'控制界面样式、输入体验、快捷键和默认系统提示词。',
-				'Control appearance, input behavior, shortcuts, and the default system prompt.'
+				'控制输入体验、快捷键和默认系统提示词。',
+				'Control input behavior, shortcuts, and the default system prompt.'
 			),
 			badgeColor: 'bg-emerald-50 dark:bg-emerald-950/30',
 			iconColor: 'text-emerald-500 dark:text-emerald-400',
 			icon: PanelTop
-		},
-		tools: {
-			title: tr('内置工具', 'Built-in Tools'),
-			description: tr(
-				'配置新用户的联网、知识库、图片、记忆和终端工具偏好。',
-				'Configure web, knowledge, image, memory, and terminal tool preferences for new users.'
-			),
-			badgeColor: 'bg-amber-50 dark:bg-amber-950/30',
-			iconColor: 'text-amber-500 dark:text-amber-400',
-			icon: Wrench
 		}
 	};
 
@@ -133,11 +119,6 @@
 		draft = draft;
 	};
 
-	const setNativeToolBool = (key: NativeToolBoolKey, value: boolean) => {
-		draft.tools.native_tools[key] = value;
-		draft = draft;
-	};
-
 	const openAndScrollToSection = async (section: SectionKey) => {
 		activeSection = section;
 		openSections = { ...openSections, [section]: true };
@@ -149,14 +130,10 @@
 	};
 
 	const hasTemplateContent = (value: NewUserDefaultSettingsPayload) =>
-		Object.keys(value.ui ?? {}).length > 0 ||
-		Object.keys(value.tools?.native_tools ?? {}).length > 0;
+		Object.keys(value.ui ?? {}).length > 0;
 
 	const createCurrentAdminPreferenceDraft = async () => {
-		const [userSettings, native] = await Promise.all([
-			getUserSettings(localStorage.token).catch(() => null),
-			getNativeToolsConfig(localStorage.token).catch(() => null)
-		]);
+		const userSettings = await getUserSettings(localStorage.token).catch(() => null);
 		const copied = cloneSettingsSnapshot(
 			pickUserDefaultUiFields(userSettings?.ui ?? $settings ?? {})
 		);
@@ -167,18 +144,8 @@
 			title: {
 				...normalized.ui.title,
 				...(copied.title ?? {})
-			},
-			imageCompressionSize: {
-				...normalized.ui.imageCompressionSize,
-				...(copied.imageCompressionSize ?? {})
 			}
 		};
-		if (native) {
-			normalized.tools.native_tools = {
-				...normalized.tools.native_tools,
-				...cloneSettingsSnapshot(native)
-			};
-		}
 
 		normalized.roles = ['user', 'pending'];
 		return normalizeNewUserDefaultSettings(normalized);
@@ -291,8 +258,6 @@
 		boolRow(tr('检测 Artifacts', 'Detect artifacts'), 'detectArtifacts'),
 		boolRow(tr('SVG 预览自动打开', 'Auto-open SVG preview'), 'svgPreviewAutoOpen'),
 		boolRow(tr('自动复制回复', 'Auto-copy response'), 'responseAutoCopy'),
-		boolRow(tr('分支切换时滚动', 'Scroll on branch change'), 'scrollOnBranchChange'),
-		boolRow(tr('消息队列', 'Message queue'), 'enableMessageQueue'),
 		boolRow(tr('默认临时聊天', 'Temporary chat by default'), 'temporaryChatByDefault'),
 		boolRow(
 			tr('新聊天继承上次状态', 'New chat inherits previous state'),
@@ -305,44 +270,15 @@
 		),
 		boolRow(tr('显示引用', 'Show inline citations'), 'showInlineCitations'),
 		boolRow(tr('显示消息大纲', 'Show message outline'), 'showMessageOutline'),
-		boolRow(tr('公式快速复制', 'Formula quick copy'), 'showFormulaQuickCopyButton'),
 		boolRow(tr('展开详情', 'Expand details'), 'expandDetails'),
 		boolRow(tr('插入建议提示词', 'Insert suggestion prompt'), 'insertSuggestionPrompt'),
 		boolRow(tr('保留追问提示', 'Keep follow-up prompts'), 'keepFollowUpPrompts'),
 		boolRow(tr('插入追问提示', 'Insert follow-up prompt'), 'insertFollowUpPrompt'),
-		boolRow(tr('重新生成菜单', 'Regenerate menu'), 'regenerateMenu'),
-		boolRow(tr('预览中渲染 Markdown', 'Render Markdown in previews'), 'renderMarkdownInPreviews'),
 		boolRow(
 			tr('多模型回复用标签页显示', 'Display multi-model responses in tabs'),
 			'displayMultiModelResponsesInTabs'
 		),
-		boolRow(tr('样式化 PDF 导出', 'Stylized PDF export'), 'stylizedPdfExport'),
-		boolRow(
-			tr('显示选中文本浮动按钮', 'Show floating action buttons'),
-			'showFloatingActionButtons'
-		),
-		boolRow(tr('记忆', 'Memory'), 'memory'),
-		boolRow(tr('图片压缩', 'Image compression'), 'imageCompression'),
-		boolRow(tr('频道内图片也压缩', 'Compress images in channels'), 'imageCompressionInChannels')
-	];
-
-	const toolRows: BoolRow<NativeToolBoolKey>[] = [
-		boolRow(tr('交错思考', 'Interleaved thinking'), 'ENABLE_INTERLEAVED_THINKING'),
-		boolRow(tr('联网搜索工具', 'Web search tool'), 'ENABLE_WEB_SEARCH_TOOL'),
-		boolRow(tr('URL 抓取', 'URL fetch'), 'ENABLE_URL_FETCH'),
-		boolRow(tr('渲染后 URL 抓取', 'Rendered URL fetch'), 'ENABLE_URL_FETCH_RENDERED'),
-		boolRow(tr('列出知识库', 'List knowledge bases'), 'ENABLE_LIST_KNOWLEDGE_BASES'),
-		boolRow(tr('搜索知识库', 'Search knowledge bases'), 'ENABLE_SEARCH_KNOWLEDGE_BASES'),
-		boolRow(tr('查询知识文件', 'Query knowledge files'), 'ENABLE_QUERY_KNOWLEDGE_FILES'),
-		boolRow(tr('查看知识文件', 'View knowledge file'), 'ENABLE_VIEW_KNOWLEDGE_FILE'),
-		boolRow(tr('图片生成工具', 'Image generation tool'), 'ENABLE_IMAGE_GENERATION_TOOL'),
-		boolRow(tr('图片编辑工具', 'Image edit tool'), 'ENABLE_IMAGE_EDIT'),
-		boolRow(tr('记忆工具', 'Memory tools'), 'ENABLE_MEMORY_TOOLS'),
-		boolRow(tr('笔记工具', 'Notes'), 'ENABLE_NOTES'),
-		boolRow(tr('聊天历史工具', 'Chat history tools'), 'ENABLE_CHAT_HISTORY_TOOLS'),
-		boolRow(tr('时间工具', 'Time tools'), 'ENABLE_TIME_TOOLS'),
-		boolRow(tr('频道工具', 'Channel tools'), 'ENABLE_CHANNEL_TOOLS'),
-		boolRow(tr('终端工具', 'Terminal tool'), 'ENABLE_TERMINAL_TOOL')
+		boolRow(tr('显示选中文本浮动按钮', 'Show floating action buttons'), 'showFloatingActionButtons')
 	];
 
 	onMount(load);
@@ -490,24 +426,6 @@
 								</div>
 							{/each}
 						</div>
-						<div class="glass-item grid gap-3 px-4 py-3 md:grid-cols-2">
-							<label class="space-y-1">
-								<div class="text-sm font-medium">{tr('压缩宽度', 'Compression width')}</div>
-								<input
-									class="w-full rounded-lg border border-gray-200 bg-transparent px-3 py-2 text-sm outline-hidden dark:border-gray-700"
-									bind:value={draft.ui.imageCompressionSize.width}
-									placeholder="1920"
-								/>
-							</label>
-							<label class="space-y-1">
-								<div class="text-sm font-medium">{tr('压缩高度', 'Compression height')}</div>
-								<input
-									class="w-full rounded-lg border border-gray-200 bg-transparent px-3 py-2 text-sm outline-hidden dark:border-gray-700"
-									bind:value={draft.ui.imageCompressionSize.height}
-									placeholder="1080"
-								/>
-							</label>
-						</div>
 					</div>
 				</PreferenceSection>
 			</div>
@@ -523,86 +441,6 @@
 					on:toggle={() => (activeSection = 'interface')}
 				>
 					<div class="space-y-3 pt-1">
-						<div class="grid gap-3 lg:grid-cols-2">
-							<div class="glass-item space-y-1 px-4 py-3">
-								<div class="text-sm font-medium">{tr('代码高亮主题', 'Code highlight theme')}</div>
-								<HaloSelect
-									bind:value={draft.ui.highlighterTheme}
-									searchEnabled={true}
-									className="w-full"
-									options={LOBE_HIGHLIGHTER_THEMES.map((item) => ({
-										value: item.id,
-										label: item.displayName
-									}))}
-								/>
-							</div>
-							<div class="glass-item space-y-1 px-4 py-3">
-								<div class="text-sm font-medium">{tr('Mermaid 主题', 'Mermaid theme')}</div>
-								<HaloSelect
-									bind:value={draft.ui.mermaidTheme}
-									className="w-full"
-									options={LOBE_MERMAID_THEMES.map((item) => ({
-										value: item.id,
-										label: item.displayName
-									}))}
-								/>
-							</div>
-							<div class="glass-item space-y-1 px-4 py-3">
-								<div class="text-sm font-medium">{tr('聊天方向', 'Chat direction')}</div>
-								<HaloSelect
-									bind:value={draft.ui.chatDirection}
-									className="w-full"
-									options={[
-										{ value: 'auto', label: tr('自动', 'Auto') },
-										{ value: 'LTR', label: 'LTR' },
-										{ value: 'RTL', label: 'RTL' }
-									]}
-								/>
-							</div>
-							<div class="glass-item space-y-1 px-4 py-3">
-								<div class="text-sm font-medium">{tr('过渡动画', 'Transition animation')}</div>
-								<HaloSelect
-									bind:value={draft.ui.transitionMode}
-									className="w-full"
-									options={[
-										{ value: 'fadeIn', label: tr('淡入', 'Fade in') },
-										{ value: 'smooth', label: tr('平滑', 'Smooth') },
-										{ value: 'none', label: tr('无', 'None') }
-									]}
-								/>
-							</div>
-							<label class="glass-item space-y-2 px-4 py-3 lg:col-span-2">
-								<div class="flex items-center justify-between gap-3">
-									<div class="text-sm font-medium">{tr('文字缩放', 'UI scale')}</div>
-									<button
-										type="button"
-										class="rounded-md border border-gray-200 px-2 py-1 text-xs dark:border-gray-700"
-										on:click={() => {
-											draft.ui.textScale = draft.ui.textScale === null ? 1 : null;
-											draft = draft;
-										}}
-									>
-										{draft.ui.textScale === null ? tr('使用默认', 'Default') : tr('清除', 'Clear')}
-									</button>
-								</div>
-								{#if draft.ui.textScale !== null}
-									<div class="flex items-center gap-3">
-										<input
-											type="range"
-											min="0.8"
-											max="1.5"
-											step="0.01"
-											class="flex-1 accent-blue-500"
-											bind:value={draft.ui.textScale}
-										/>
-										<span class="w-12 text-right text-xs tabular-nums text-gray-500">
-											{Math.round((draft.ui.textScale ?? 1) * 100)}%
-										</span>
-									</div>
-								{/if}
-							</label>
-						</div>
-
 						<div class="grid gap-2 md:grid-cols-2">
 							{#each interfaceRows as row}
 								<div class="glass-item flex items-center justify-between gap-3 px-4 py-3">
@@ -622,65 +460,6 @@
 								bind:value={draft.ui.system}
 							/>
 						</label>
-					</div>
-				</PreferenceSection>
-			</div>
-
-			<div id="new-user-defaults-tools" class="scroll-mt-4">
-				<PreferenceSection
-					bind:open={openSections.tools}
-					title={sectionMeta.tools.title}
-					description={sectionMeta.tools.description}
-					badgeColor={sectionMeta.tools.badgeColor}
-					iconColor={sectionMeta.tools.iconColor}
-					icon={sectionMeta.tools.icon}
-					on:toggle={() => (activeSection = 'tools')}
-				>
-					<div class="space-y-3 pt-1">
-						<div class="grid gap-3 md:grid-cols-2">
-							<div class="glass-item space-y-1 px-4 py-3">
-								<div class="text-sm font-medium">{tr('工具调用模式', 'Tool calling mode')}</div>
-								<HaloSelect
-									bind:value={draft.tools.native_tools.TOOL_CALLING_MODE}
-									className="w-full"
-									options={[
-										{ value: 'default', label: tr('兼容', 'Compatibility') },
-										{ value: 'native', label: tr('原生', 'Native') },
-										{ value: 'off', label: tr('关闭', 'Off') }
-									]}
-								/>
-							</div>
-							<label class="glass-item space-y-1 px-4 py-3">
-								<div class="text-sm font-medium">
-									{tr('最大工具调用轮数', 'Max tool call rounds')}
-								</div>
-								<input
-									type="number"
-									min="1"
-									max="30"
-									step="1"
-									class="w-full rounded-lg border border-gray-200 bg-transparent px-3 py-2 text-sm outline-hidden dark:border-gray-700"
-									bind:value={draft.tools.native_tools.MAX_TOOL_CALL_ROUNDS}
-								/>
-							</label>
-						</div>
-						<div class="grid gap-2 md:grid-cols-2">
-							{#each toolRows as row}
-								<div class="glass-item flex items-center justify-between gap-3 px-4 py-3">
-									<div class="min-w-0 text-sm font-medium">{row.label}</div>
-									<Switch
-										state={draft.tools.native_tools[row.key]}
-										on:change={(event) => setNativeToolBool(row.key, event.detail)}
-									/>
-								</div>
-							{/each}
-						</div>
-						<div class="text-xs text-gray-500 dark:text-gray-400">
-							{tr(
-								'这些只是新账号的默认工具偏好，不能绕过全局功能开关或权限组限制。',
-								'These are only default tool preferences for new accounts and cannot bypass global feature switches or permissions.'
-							)}
-						</div>
 					</div>
 				</PreferenceSection>
 			</div>

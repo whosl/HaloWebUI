@@ -547,8 +547,7 @@ class TestUsers(AbstractPostgresTest):
             assert saved["ui"]["models"] == ["gpt-4o"]
             assert saved["ui"]["temporaryChatByDefault"] is True
             assert "connections" not in saved["ui"]
-            assert saved["tools"]["native_tools"]["TOOL_CALLING_MODE"] == "native"
-            assert saved["tools"]["native_tools"]["MAX_TOOL_CALL_ROUNDS"] == 12
+            assert saved["tools"]["native_tools"] == {}
 
             created = self.users.insert_new_user(
                 id="templated",
@@ -558,12 +557,7 @@ class TestUsers(AbstractPostgresTest):
             )
             assert created.settings.ui["models"] == ["gpt-4o"]
             assert created.settings.ui["temporaryChatByDefault"] is True
-            assert created.settings.tools["native_tools"]["TOOL_CALLING_MODE"] == "native"
-            assert (
-                created.settings.tools["native_tools"]["ENABLE_WEB_SEARCH_TOOL"]
-                is False
-            )
-            assert created.settings.tools["native_tools"]["MAX_TOOL_CALL_ROUNDS"] == 12
+            assert "tools" not in created.settings.model_dump(exclude_none=True)
             assert created.settings.revision == 0
 
             pending_created = self.users.insert_new_user(

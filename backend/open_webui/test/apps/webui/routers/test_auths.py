@@ -218,10 +218,7 @@ class TestAuths(AbstractPostgresTest):
             user = self.users.get_user_by_id(response.json()["id"])
             assert user.settings.ui["models"] == ["gpt-4o"]
             assert user.settings.ui["temporaryChatByDefault"] is True
-            assert user.settings.tools["native_tools"]["TOOL_CALLING_MODE"] == "native"
-            assert (
-                user.settings.tools["native_tools"]["ENABLE_WEB_SEARCH_TOOL"] is False
-            )
+            assert "tools" not in user.settings.model_dump(exclude_none=True)
         finally:
             app.state.config.NEW_USER_DEFAULT_SETTINGS = {
                 "enabled": False,

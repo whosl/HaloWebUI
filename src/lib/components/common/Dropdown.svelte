@@ -19,7 +19,7 @@
 	typeahead={false}
 >
 	<DropdownMenu.Trigger asChild let:builder>
-		<div {...builder} use:builder.action class="contents">
+		<div {...builder} use:builder.action class="inline-flex min-w-0 max-w-full align-middle">
 			<slot {builder} />
 		</div>
 	</DropdownMenu.Trigger>
