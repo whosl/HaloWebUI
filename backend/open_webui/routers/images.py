@@ -881,7 +881,10 @@ def _extract_openai_image_routes_from_endpoint_blob(endpoint_blob: str) -> set[s
     if (
         "/responses" in normalized
         or "openai-response" in normalized
-        or re.search(r"(^|[\/._:-])responses([\/._:-]|$)", normalized)
+        or re.search(
+            r"(^|[\s\[\]\"'\/._:-])responses([\s\[\]\"'\/._:-]|$)",
+            normalized,
+        )
     ):
         routes.add(OPENAI_IMAGE_ROUTE_RESPONSES)
     return routes
@@ -944,11 +947,15 @@ def _should_offer_openai_chat_image_route(
     routes = endpoint_routes or set()
     if routes & {OPENAI_IMAGE_ROUTE_CHAT, OPENAI_IMAGE_ROUTE_RESPONSES}:
         return False
+    if routes == {OPENAI_IMAGE_ROUTE_EDITS}:
+        return False
     if generation_mode != "openai_images":
         return False
     if openai_router._is_official_openai_connection(base_url):
         return False
-    return _is_openai_image_edit_compatible_model(base_name)
+    return _is_openai_image_edit_compatible_model(
+        base_name
+    ) or _looks_like_gemini_image_model(base_name)
 
 
 def _model_text_blob(model: dict) -> str:
@@ -1830,14 +1837,16 @@ def _build_image_model_entry(
             normalized_routes = [OPENAI_IMAGE_ROUTE_GENERATIONS]
         elif generation_mode == "xai_images":
             normalized_routes = [OPENAI_IMAGE_ROUTE_GENERATIONS]
+    source_base_url = (
+        str(source.get("base_url") or "").strip() if isinstance(source, dict) else ""
+    )
     if (
         generation_mode == "openai_images"
         and OPENAI_IMAGE_ROUTE_CHAT not in normalized_routes
+        and source_base_url
         and _should_offer_openai_chat_image_route(
             base_name=_model_id_basename(model_id).lower(),
-            base_url=(
-                str(source.get("base_url") or "") if isinstance(source, dict) else ""
-            ),
+            base_url=source_base_url,
             generation_mode=generation_mode,
             endpoint_routes=set(normalized_routes),
         )
@@ -6104,13 +6113,32 @@ async def _generate_via_gemini_generate_content(
     image_size: Optional[str],
     aspect_ratio: Optional[str],
     source: dict[str, Any],
+    image_url: Optional[str] = None,
 ) -> list[dict[str, str]]:
     base_url = source.get("base_url") or ""
     api_key = source.get("key") or ""
     api_config = source.get("api_config") or {}
     upstream_model_id = _strip_connection_model_prefix(model_id, api_config)
+    parts: list[dict[str, Any]] = [{"text": prompt}]
+    if image_url:
+        resolved_image = _resolve_image_edit_input(request, user, image_url)
+        if not resolved_image:
+            raise HTTPException(
+                status_code=400,
+                detail="Failed to resolve image input for Gemini generateContent request.",
+            )
+        image_mime, image_bytes = resolved_image
+        parts.append(
+            {
+                "inline_data": {
+                    "mime_type": image_mime or "image/png",
+                    "data": base64.b64encode(image_bytes).decode("utf-8"),
+                }
+            }
+        )
+
     payload = {
-        "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+        "contents": [{"role": "user", "parts": parts}],
         "generationConfig": {"responseModalities": ["TEXT", "IMAGE"]},
     }
     image_config: dict[str, Any] = {}
@@ -6654,6 +6682,7 @@ async def image_generations(
                         == "aspect_ratio"
                         else None
                     ),
+                    image_url=form_data.image_url,
                     source=source,
                 )
 

@@ -392,6 +392,28 @@ def test_openai_compatible_gemini_image_model_without_preview_suffix_is_detected
     assert classified["generation_mode"] == "openai_chat_image"
 
 
+def test_openai_compatible_gemini_images_endpoint_keeps_chat_reference_route():
+    classified = _classify_openai_image_model(
+        {
+            "id": "gemini-3.1-flash-image-preview",
+            "name": "gemini-3.1-flash-image-preview",
+            "endpoints": ["/v1/images/generations"],
+        },
+        base_url="https://relay.example/v1",
+        api_config={},
+        source={
+            "base_url": "https://relay.example/v1",
+            "effective_source": "personal",
+            "provider": "openai",
+        },
+    )
+
+    assert classified is not None
+    assert classified["generation_mode"] == "openai_images"
+    assert classified["supported_image_routes"] == ["generations", "chat"]
+    assert classified["default_image_route"] == "generations"
+
+
 def test_grok_image_model_is_detected():
     classified = _classify_grok_image_model(
         {

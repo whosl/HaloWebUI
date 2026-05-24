@@ -1756,6 +1756,98 @@ def test_chat_openai_model_with_chat_only_endpoint_uses_chat_image_path(monkeypa
     assert captured["n"] == 1
 
 
+def test_openai_compatible_gemini_reference_uses_chat_image_path(monkeypatch):
+    same_base_url = "https://relay.example.com/v1"
+    cfg = SimpleNamespace(
+        ENABLE_IMAGE_GENERATION=True,
+        IMAGE_GENERATION_ENGINE="openai",
+        IMAGE_GENERATION_MODEL="",
+        IMAGE_SIZE="auto",
+        IMAGE_ASPECT_RATIO="1:1",
+        IMAGE_RESOLUTION="1k",
+        ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+        IMAGES_OPENAI_API_BASE_URL="",
+        IMAGES_OPENAI_API_KEY="",
+        IMAGES_OPENAI_API_FORCE_MODE=False,
+        IMAGE_MODEL_FILTER_REGEX="",
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=cfg)))
+    user = SimpleNamespace(id="user-1", role="admin")
+
+    monkeypatch.setattr(
+        images_router.openai_router,
+        "_get_openai_user_config",
+        lambda _user: (
+            [same_base_url],
+            ["key-a"],
+            {"0": {"remark": "OpenAI-compatible Gemini"}},
+        ),
+    )
+
+    async def fake_discover(_request, _user, engine, source):
+        assert engine == "openai"
+        return [
+            images_router._build_image_model_entry(
+                model_id="gemini-3.1-flash-image-preview",
+                name="gemini-3.1-flash-image-preview",
+                generation_mode="openai_images",
+                detection_method="metadata",
+                supports_background=False,
+                supports_batch=True,
+                size_mode="exact",
+                text_output_supported=False,
+                source=source,
+            )
+        ]
+
+    captured = {}
+
+    async def fake_chat_image(_request, _user, **kwargs):
+        captured.update(kwargs)
+        return [{"url": "/api/v1/files/generated"}]
+
+    async def fail_images_endpoint(*_args, **_kwargs):
+        raise AssertionError("Gemini reference image must not use generations")
+
+    monkeypatch.setattr(
+        images_router, "_discover_image_models_for_source", fake_discover
+    )
+    monkeypatch.setattr(
+        images_router, "_generate_via_openai_chat_image", fake_chat_image
+    )
+    monkeypatch.setattr(
+        images_router, "_generate_via_openai_images_endpoint", fail_images_endpoint
+    )
+
+    source = images_router._list_image_provider_sources(
+        request,
+        user,
+        "openai",
+        context="runtime",
+        credential_source="auto",
+    )[0]
+    selected_model = images_router._build_image_model_selection_key(
+        "gemini-3.1-flash-image-preview", source
+    )
+
+    result = asyncio.run(
+        images_router.image_generations(
+            request,
+            images_router.GenerateImageForm(
+                prompt="use the reference image",
+                model=selected_model,
+                image_url="/api/v1/files/source/content",
+                chat_generation=True,
+            ),
+            user=user,
+        )
+    )
+
+    assert result == [{"url": "/api/v1/files/generated"}]
+    assert captured["model_id"] == "gemini-3.1-flash-image-preview"
+    assert captured["image_url"] == "/api/v1/files/source/content"
+
+
 def test_chat_openai_image_path_receives_requested_batch_size(monkeypatch):
     same_base_url = "https://relay.example.com/v1"
     cfg = SimpleNamespace(
@@ -3037,3 +3129,84 @@ def test_gemini_named_image_model_on_openai_compatible_connection_uses_openai_so
     assert captured["source"]["provider"] == "openai"
     assert captured["source"]["key"] == "openai-compatible-key"
     assert captured["size"] is None
+
+
+def test_gemini_generate_content_image_request_includes_reference(monkeypatch):
+    request = SimpleNamespace()
+    user = SimpleNamespace(id="user-1", role="admin")
+    captured = {}
+
+    monkeypatch.setattr(
+        images_router,
+        "_resolve_image_edit_input",
+        lambda *_args, **_kwargs: ("image/png", b"source-image"),
+    )
+    monkeypatch.setattr(
+        images_router,
+        "upload_image",
+        lambda *_args, **_kwargs: "/api/v1/files/generated",
+    )
+
+    class FakeResponse:
+        status_code = 200
+
+        def json(self):
+            return {
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [
+                                {
+                                    "inlineData": {
+                                        "mimeType": "image/png",
+                                        "data": "YWJj",
+                                    }
+                                }
+                            ]
+                        }
+                    }
+                ]
+            }
+
+    def fake_post_json_with_attempts(attempts, payload):
+        captured["attempts"] = attempts
+        captured["payload"] = payload
+        return (
+            FakeResponse(),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image:generateContent",
+        )
+
+    monkeypatch.setattr(
+        images_router, "_post_json_with_attempts", fake_post_json_with_attempts
+    )
+
+    result = asyncio.run(
+        images_router._generate_via_gemini_generate_content(
+            request,
+            user,
+            model_id="gemini-3.1-flash-image",
+            prompt="turn this into stickers",
+            image_size="1K",
+            aspect_ratio="1:1",
+            image_url="/api/v1/files/source/content",
+            source={
+                "base_url": "https://generativelanguage.googleapis.com/v1beta",
+                "key": "gemini-key",
+                "api_config": {},
+            },
+        )
+    )
+
+    assert result == [{"url": "/api/v1/files/generated"}]
+    parts = captured["payload"]["contents"][0]["parts"]
+    assert parts[0] == {"text": "turn this into stickers"}
+    assert parts[1] == {
+        "inline_data": {
+            "mime_type": "image/png",
+            "data": "c291cmNlLWltYWdl",
+        }
+    }
+    assert captured["payload"]["generationConfig"]["imageConfig"] == {
+        "aspectRatio": "1:1",
+        "imageSize": "1K",
+    }
