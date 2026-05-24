@@ -33,9 +33,37 @@ describe('chat-message-errors', () => {
 		expect(hasVisibleMessageFiles([{ type: 'file', source: 'code_interpreter' }])).toBe(false);
 	});
 
+	it('treats image generation failure slots as visible output', () => {
+		expect(
+			hasVisibleMessageFiles([
+				{
+					type: 'image_generation_error',
+					source: 'image_generation',
+					status: 'failed',
+					error: 'Server disconnected without sending a response.'
+				}
+			])
+		).toBe(true);
+	});
+
 	it('hides missing-output errors when visible files already exist', () => {
 		const error = { type: 'empty_response', content: '模型返回了空响应（0 token）。' };
 		const files = [{ type: 'image', url: '/api/v1/files/demo/content' }];
+
+		expect(shouldHideMissingOutputError(error, files)).toBe(true);
+		expect(getRenderableMessageError(error, files)).toBeNull();
+	});
+
+	it('hides empty-response errors behind image generation failure slots', () => {
+		const error = { type: 'empty_response', content: '模型返回了空响应（0 token）。' };
+		const files = [
+			{
+				type: 'image_generation_error',
+				source: 'image_generation',
+				status: 'failed',
+				error: 'Server disconnected without sending a response.'
+			}
+		];
 
 		expect(shouldHideMissingOutputError(error, files)).toBe(true);
 		expect(getRenderableMessageError(error, files)).toBeNull();

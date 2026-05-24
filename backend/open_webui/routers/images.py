@@ -4807,6 +4807,10 @@ async def _send_openai_image_request(
     else:
         raise RuntimeError(f"Unsupported OpenAI image request kind: {request_kind}")
 
+    expects_stream = bool(
+        (request_json or {}).get("stream")
+        or str((request_data or {}).get("stream") or "").lower() == "true"
+    )
     started_at = time.monotonic()
     try:
         timeout = (
@@ -4818,10 +4822,6 @@ async def _send_openai_image_request(
             verify=REQUESTS_VERIFY,
             follow_redirects=True,
         ) as client:
-            expects_stream = bool(
-                (request_json or {}).get("stream")
-                or str((request_data or {}).get("stream") or "").lower() == "true"
-            )
             if expects_stream:
                 async with client.stream(
                     "POST",
@@ -4859,17 +4859,32 @@ async def _send_openai_image_request(
                 "elapsed_ms": int((time.monotonic() - started_at) * 1000),
             }
     except Exception as error:
+        elapsed_ms = int((time.monotonic() - started_at) * 1000)
         log.warning(
             "openai_image_request_failed request_kind=%s url=%s error_type=%s error_message=%s elapsed_ms=%s",
             request_kind,
             url,
             error.__class__.__name__,
             str(error),
-            int((time.monotonic() - started_at) * 1000),
+            elapsed_ms,
         )
+        raw_error = str(error)
+        if "server disconnected without sending a response" in raw_error.lower():
+            non_stream_hint = (
+                "当前图片请求是非流式模式，长图或慢图可能在返回完整结果前被中转站、Cloudflare 或反代断开；"
+                "可在图片高级参数里打开流式传输后重试。"
+                if not expects_stream
+                else "当前图片请求已经是流式模式；请检查 New API 或反代的长请求连接设置。"
+            )
+            raw_error = (
+                "中转站在返回图片结果前断开连接。请求已经发到上游图片服务，"
+                "可能已经在上游完成或产生计费，但 HolaWebUI 没有收到 HTTP 响应头；"
+                f"{non_stream_hint}"
+                f"原始错误：{raw_error}"
+            )
         raise RuntimeError(
             build_error_detail(
-                str(error),
+                raw_error,
                 default="Failed to contact upstream image generation service",
             )
         ) from error

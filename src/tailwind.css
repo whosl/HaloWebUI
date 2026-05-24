@@ -2,31 +2,6 @@
 
 @config '../tailwind.config.js';
 
-/* HarmonyOS Sans 鸿蒙字体 */
-@font-face {
-	font-family: 'HarmonyOS Sans SC';
-	src: url('/assets/fonts/HarmonyOS_SansSC_Regular.woff2') format('woff2');
-	font-weight: 400;
-	font-style: normal;
-	font-display: block;
-}
-
-@font-face {
-	font-family: 'HarmonyOS Sans SC';
-	src: url('/assets/fonts/HarmonyOS_SansSC_Medium.woff2') format('woff2');
-	font-weight: 500;
-	font-style: normal;
-	font-display: block;
-}
-
-@font-face {
-	font-family: 'HarmonyOS Sans SC';
-	src: url('/assets/fonts/HarmonyOS_SansSC_Bold.woff2') format('woff2');
-	font-weight: 700;
-	font-style: normal;
-	font-display: block;
-}
-
 /*
   The default border color has changed to `currentColor` in Tailwind CSS v4,
   so we've added these compatibility styles to make sure everything still
@@ -49,20 +24,22 @@
 	html,
 	pre {
 		font-family:
+			'HarmonyOS Sans',
 			'HarmonyOS Sans SC',
+			'Segoe UI',
 			-apple-system,
 			BlinkMacSystemFont,
 			'PingFang SC',
-			'Inter',
 			ui-sans-serif,
 			system-ui,
-			'Segoe UI',
 			Roboto,
 			'Helvetica Neue',
 			Arial,
 			'Noto Sans',
 			'Hiragino Sans GB',
+			'Microsoft YaHei UI',
 			'Microsoft YaHei',
+			'Source Han Sans CN',
 			'WenQuanYi Micro Hei',
 			sans-serif,
 			'Apple Color Emoji',

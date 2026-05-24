@@ -62,6 +62,44 @@ def test_send_openai_image_request_uses_httpx_json(monkeypatch):
     assert captured["post_kwargs"]["files"] is None
 
 
+def test_send_openai_image_request_explains_disconnected_response(monkeypatch):
+    class FakeAsyncClient:
+        def __init__(self, **_kwargs):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def post(self, *_args, **_kwargs):
+            raise images_router.httpx.RemoteProtocolError(
+                "Server disconnected without sending a response."
+            )
+
+    monkeypatch.setattr(images_router.httpx, "AsyncClient", FakeAsyncClient)
+
+    try:
+        asyncio.run(
+            images_router._send_openai_image_request(
+                url="https://relay.example.com/v1/images/edits",
+                headers={"Authorization": "Bearer test"},
+                request_kind="multipart",
+                form_fields={"model": "gpt-image-2", "prompt": "cat"},
+            )
+        )
+        assert False, "expected disconnected response error"
+    except RuntimeError as exc:
+        message = str(exc)
+
+    assert "中转站在返回图片结果前断开连接" in message
+    assert "没有收到 HTTP 响应头" in message
+    assert "当前图片请求是非流式模式" in message
+    assert "打开流式传输后重试" in message
+    assert "Server disconnected without sending a response" in message
+
+
 def test_send_openai_image_request_parses_official_stream(monkeypatch):
     b64_image = base64.b64encode(b"generated" * 32).decode("utf-8")
 

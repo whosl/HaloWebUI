@@ -433,7 +433,7 @@ const getPalette = (isDark: boolean): Palette =>
 			};
 
 const FONT_FAMILY =
-	"'HarmonyOS Sans SC', -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Inter', ui-sans-serif, system-ui, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Hiragino Sans GB', 'Microsoft YaHei', 'WenQuanYi Micro Hei', sans-serif";
+	"'HarmonyOS Sans', 'HarmonyOS Sans SC', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'PingFang SC', ui-sans-serif, system-ui, Roboto, 'Helvetica Neue', Arial, 'Noto Sans', 'Hiragino Sans GB', 'Microsoft YaHei UI', 'Microsoft YaHei', 'Source Han Sans CN', 'WenQuanYi Micro Hei', sans-serif";
 const MONO_FONT_FAMILY =
 	"'JetBrains Mono', 'Fira Code', 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, monospace";
 
