@@ -143,6 +143,8 @@
 			query?: string;
 		};
 		done: boolean;
+		stopped?: boolean;
+		stoppedByUser?: boolean;
 		completedAt?: number;
 		usage?: Record<string, unknown>;
 		error?:
@@ -1487,12 +1489,20 @@
 										{/if}
 
 										{#if message.content === '' && message.done && !renderableMessageError && !hasVisibleMessageFiles}
-											<!-- Empty response: model returned 0 tokens without error -->
-											<Error
-												content={$i18n.t(
-													'Model returned an empty response. Try resending or switching models.'
-												)}
-											/>
+											{#if message.stopped || message.stoppedByUser}
+												<div
+													class="status-description flex items-center gap-1.5 py-1 text-[13px] leading-5 text-gray-500 dark:text-gray-400"
+												>
+													{$i18n.t('Response stopped.')}
+												</div>
+											{:else}
+												<!-- Empty response: model returned 0 tokens without error -->
+												<Error
+													content={$i18n.t(
+														'Model returned an empty response. Try resending or switching models.'
+													)}
+												/>
+											{/if}
 										{:else if message.content && message.error !== true}
 											<!-- always show message contents even if there's an error -->
 											<!-- unless message.error === true which is legacy error handling, where the error message is stored in message.content -->

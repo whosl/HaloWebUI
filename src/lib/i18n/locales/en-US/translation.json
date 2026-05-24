@@ -918,6 +918,7 @@
 	"Model Params": "",
 	"Model Permissions": "",
 	"Model returned an empty response. Try resending or switching models.": "Model returned an empty response. Try resending or switching models.",
+	"Response stopped.": "Response stopped.",
 	"Upstream image generation completed but returned no images.": "The image service returned success, but no image data was included.",
 	"This model only accepts aspect ratio requests. {{size}} will be sent as {{ratio}}, not as an exact pixel size.": "This model only accepts aspect ratio requests. {{size}} will be sent as {{ratio}}, not as an exact pixel size.",
 	"Common causes": "Common causes",

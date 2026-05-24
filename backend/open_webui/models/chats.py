@@ -1335,7 +1335,7 @@ class ChatMessageTable:
             meta_keys = {
                 "files", "sources", "code_executions", "statusHistory",
                 "childrenIds", "models", "modelName", "modelIdx", "model_ref",
-                "done", "error", "info", "completedAt", "userContext",
+                "done", "stopped", "stoppedByUser", "error", "info", "completedAt", "userContext",
                 "merged", "lastSentence", "originalContent",
             }
             meta = {k: v for k, v in message.items() if k in meta_keys and v is not None}

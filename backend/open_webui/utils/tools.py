@@ -1,4 +1,5 @@
 import inspect
+import contextlib
 import logging
 import re
 import aiohttp
@@ -37,7 +38,7 @@ from open_webui.models.users import UserModel
 from open_webui.constants import ERROR_MESSAGES
 from open_webui.utils.access_control import can_read_resource
 from open_webui.utils.plugin import load_tool_module_by_id
-from open_webui.env import AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA
+from open_webui.env import AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA, MCP_TOOL_CALL_TIMEOUT
 from open_webui.utils.mcp import execute_mcp_tool
 from open_webui.utils.shared_tool_servers import (
     MCP_SHARED_TOOL_PREFIX,
@@ -49,6 +50,12 @@ from open_webui.utils.shared_tool_servers import (
 import copy
 
 log = logging.getLogger(__name__)
+
+
+def _format_mcp_timeout_label(timeout_s: int) -> str:
+    if timeout_s > 0 and timeout_s % 60 == 0:
+        return f"{timeout_s // 60} 分钟"
+    return f"{timeout_s} 秒"
 
 
 def validate_tool_ids_access(
@@ -246,7 +253,35 @@ def _make_mcp_tool_runtime(
         def make_tool_function(original_tool_name, mcp_server_connection):
             async def tool_function(__event_emitter__=None, **kwargs):
                 notif_cb = None
+                keepalive_task = None
                 if __event_emitter__ is not None:
+
+                    async def emit_mcp_status(description: str, done: bool = False):
+                        try:
+                            await __event_emitter__(
+                                {
+                                    "type": "status",
+                                    "data": {
+                                        "action": "mcp_tool_execution",
+                                        "description": description,
+                                        "done": done,
+                                    },
+                                }
+                            )
+                        except Exception as exc:
+                            log.debug("Failed to emit MCP tool status: %s", exc)
+
+                    async def emit_mcp_keepalive():
+                        await asyncio.sleep(20)
+                        timeout_label = _format_mcp_timeout_label(MCP_TOOL_CALL_TIMEOUT)
+                        while True:
+                            await emit_mcp_status(
+                                f"MCP 工具「{original_tool_name}」仍在执行，最长等待 {timeout_label}",
+                                done=False,
+                            )
+                            await asyncio.sleep(20)
+
+                    keepalive_task = asyncio.create_task(emit_mcp_keepalive())
 
                     async def notif_cb(notification):
                         method = notification.get("method", "")
@@ -282,20 +317,32 @@ def _make_mcp_tool_runtime(
                                 }
                             )
 
-                return await execute_mcp_tool(
-                    mcp_server_connection,
-                    name=original_tool_name,
-                    arguments=kwargs,
-                    session_token=getattr(
-                        getattr(request, "state", None),
-                        "token",
-                        None,
-                    ).credentials
-                    if getattr(getattr(request, "state", None), "token", None)
-                    else None,
-                    user_id=getattr(user, "id", None),
-                    on_notification=notif_cb,
-                )
+                try:
+                    result = await execute_mcp_tool(
+                        mcp_server_connection,
+                        name=original_tool_name,
+                        arguments=kwargs,
+                        session_token=getattr(
+                            getattr(request, "state", None),
+                            "token",
+                            None,
+                        ).credentials
+                        if getattr(getattr(request, "state", None), "token", None)
+                        else None,
+                        user_id=getattr(user, "id", None),
+                        on_notification=notif_cb,
+                    )
+                    return result
+                finally:
+                    if keepalive_task is not None:
+                        keepalive_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError, Exception):
+                            await keepalive_task
+                    if __event_emitter__ is not None:
+                        await emit_mcp_status(
+                            f"MCP 工具「{original_tool_name}」执行结束",
+                            done=True,
+                        )
 
             return tool_function
 

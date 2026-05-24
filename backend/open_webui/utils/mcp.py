@@ -63,6 +63,37 @@ MCP_RESERVED_HTTP_HEADER_NAMES = {
 }
 
 
+def _format_timeout_label(timeout_s: Optional[int]) -> str:
+    if not isinstance(timeout_s, int) or timeout_s <= 0:
+        return "较长时间"
+    if timeout_s % 60 == 0:
+        minutes = timeout_s // 60
+        return f"{minutes} 分钟"
+    return f"{timeout_s} 秒"
+
+
+class MCPToolCallTimeout(RuntimeError):
+    def __init__(self, timeout_s: Optional[int], *, tool_name: str = ""):
+        self.timeout_s = timeout_s
+        self.tool_name = tool_name
+        subject = f"MCP 工具「{tool_name}」" if tool_name else "MCP 工具"
+        timeout_label = _format_timeout_label(timeout_s)
+        super().__init__(
+            f"{subject}执行超过 {timeout_label}，系统已停止等待。"
+            "请稍后重试，或检查该 MCP 服务是否卡住。"
+        )
+
+
+class MCPConnectionTimeout(RuntimeError):
+    def __init__(self, timeout_s: Optional[int]):
+        self.timeout_s = timeout_s
+        timeout_label = _format_timeout_label(timeout_s)
+        super().__init__(
+            f"MCP 服务器连接超过 {timeout_label}，系统已停止等待。"
+            "请检查该 MCP 服务是否可访问。"
+        )
+
+
 class MCPHttpError(RuntimeError):
     def __init__(
         self,
@@ -488,6 +519,7 @@ class MCPStreamableHttpClient:
         request_headers: Optional[Dict[str, str]] = None,
         protocol_version: str = DEFAULT_MCP_PROTOCOL_VERSION,
         timeout_s: Optional[int] = None,
+        tool_timeout_s: Optional[int] = None,
     ):
         self.url = _strip_trailing_slash(url)
         merged_headers: Dict[str, str] = {}
@@ -500,6 +532,7 @@ class MCPStreamableHttpClient:
         self.timeout_s = (
             timeout_s if timeout_s is not None else AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA
         )
+        self.tool_timeout_s = tool_timeout_s if tool_timeout_s is not None else self.timeout_s
         self.session_id: Optional[str] = None
 
     def _build_request_headers(self) -> Dict[str, str]:
@@ -517,9 +550,11 @@ class MCPStreamableHttpClient:
         self,
         payload: Dict[str, Any],
         on_notification: Optional[Callable[[Dict[str, Any]], Coroutine]] = None,
+        timeout_s: Optional[int] = None,
     ) -> Tuple[Dict[str, Any], Optional[str]]:
         headers = self._build_request_headers()
-        timeout = aiohttp.ClientTimeout(total=self.timeout_s) if self.timeout_s else None
+        effective_timeout_s = self.timeout_s if timeout_s is None else timeout_s
+        timeout = aiohttp.ClientTimeout(total=effective_timeout_s) if effective_timeout_s else None
         ssl_ctx = _get_ssl_context()
         async with aiohttp.ClientSession(timeout=timeout) as session:
             async with session.post(self.url, headers=headers, json=payload, ssl=ssl_ctx) as resp:
@@ -689,7 +724,17 @@ class MCPStreamableHttpClient:
             "method": "tools/call",
             "params": {"name": name, "arguments": arguments or {}},
         }
-        msg, _ = await self._post_jsonrpc(payload, on_notification=on_notification)
+        try:
+            msg, _ = await self._post_jsonrpc(
+                payload,
+                on_notification=on_notification,
+                timeout_s=self.tool_timeout_s,
+            )
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise MCPToolCallTimeout(
+                self.tool_timeout_s,
+                tool_name=name,
+            ) from exc
         if "error" in msg:
             raise RuntimeError(str(msg["error"]))
         return msg.get("result", {}) or {}
@@ -704,6 +749,7 @@ class MCPLegacySSEHttpClient:
         request_headers: Optional[Dict[str, str]] = None,
         protocol_version: str = DEFAULT_MCP_PROTOCOL_VERSION,
         timeout_s: Optional[int] = None,
+        tool_timeout_s: Optional[int] = None,
     ):
         self.url = _strip_trailing_slash(url)
         merged_headers: Dict[str, str] = {}
@@ -716,6 +762,7 @@ class MCPLegacySSEHttpClient:
         self.timeout_s = (
             timeout_s if timeout_s is not None else AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA
         )
+        self.tool_timeout_s = tool_timeout_s if tool_timeout_s is not None else self.timeout_s
         self.message_url: Optional[str] = None
         self._session: Optional[aiohttp.ClientSession] = None
         self._sse_response: Optional[aiohttp.ClientResponse] = None
@@ -735,9 +782,26 @@ class MCPLegacySSEHttpClient:
 
     async def _get_session(self) -> aiohttp.ClientSession:
         if self._session is None or self._session.closed:
-            timeout = aiohttp.ClientTimeout(total=self.timeout_s) if self.timeout_s else None
+            timeout = (
+                aiohttp.ClientTimeout(
+                    total=None,
+                    connect=self.timeout_s,
+                    sock_connect=self.timeout_s,
+                )
+                if self.timeout_s
+                else None
+            )
             self._session = aiohttp.ClientSession(timeout=timeout)
         return self._session
+
+    async def _await_with_timeout(
+        self,
+        coro: Coroutine[Any, Any, Any],
+        timeout_s: Optional[int],
+    ) -> Any:
+        if not timeout_s:
+            return await coro
+        return await asyncio.wait_for(coro, timeout=timeout_s)
 
     def _build_stream_headers(self) -> Dict[str, str]:
         return {
@@ -954,7 +1018,10 @@ class MCPLegacySSEHttpClient:
 
             try:
                 async with self._request_lock:
-                    msg = await self._post_jsonrpc(payload, expect_response=True)
+                    msg = await self._await_with_timeout(
+                        self._post_jsonrpc(payload, expect_response=True),
+                        self.timeout_s,
+                    )
             except MCPHttpError as exc:
                 supported_versions = _extract_supported_versions(
                     exc.parsed_json, exc.raw_body
@@ -1022,7 +1089,10 @@ class MCPLegacySSEHttpClient:
             "params": {},
         }
         async with self._request_lock:
-            await self._post_jsonrpc(payload, expect_response=False)
+            await self._await_with_timeout(
+                self._post_jsonrpc(payload, expect_response=False),
+                self.timeout_s,
+            )
 
     async def list_tools(self) -> List[Dict[str, Any]]:
         tools: List[Dict[str, Any]] = []
@@ -1037,7 +1107,10 @@ class MCPLegacySSEHttpClient:
                 "params": {"cursor": cursor} if cursor else {},
             }
             async with self._request_lock:
-                msg = await self._post_jsonrpc(payload, expect_response=True)
+                msg = await self._await_with_timeout(
+                    self._post_jsonrpc(payload, expect_response=True),
+                    self.timeout_s,
+                )
 
             msg = msg or {}
             if "error" in msg:
@@ -1064,12 +1137,21 @@ class MCPLegacySSEHttpClient:
             "method": "tools/call",
             "params": {"name": name, "arguments": arguments or {}},
         }
-        async with self._request_lock:
-            msg = await self._post_jsonrpc(
-                payload,
-                expect_response=True,
-                on_notification=on_notification,
-            )
+        try:
+            async with self._request_lock:
+                msg = await self._await_with_timeout(
+                    self._post_jsonrpc(
+                        payload,
+                        expect_response=True,
+                        on_notification=on_notification,
+                    ),
+                    self.tool_timeout_s,
+                )
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise MCPToolCallTimeout(
+                self.tool_timeout_s,
+                tool_name=name,
+            ) from exc
 
         msg = msg or {}
         if "error" in msg:
@@ -1086,18 +1168,23 @@ class MCPHttpClient:
         request_headers: Optional[Dict[str, str]] = None,
         protocol_version: str = DEFAULT_MCP_PROTOCOL_VERSION,
         timeout_s: Optional[int] = None,
+        tool_timeout_s: Optional[int] = None,
     ):
         self.url = url
         self.auth_headers = auth_headers
         self.request_headers = request_headers
         self.protocol_version = protocol_version
         self.timeout_s = timeout_s
+        self.tool_timeout_s = (
+            tool_timeout_s if tool_timeout_s is not None else timeout_s
+        )
         self._client: Any = MCPStreamableHttpClient(
             url,
             auth_headers=auth_headers,
             request_headers=request_headers,
             protocol_version=protocol_version,
             timeout_s=timeout_s,
+            tool_timeout_s=tool_timeout_s,
         )
 
     async def initialize(self) -> Dict[str, Any]:
@@ -1116,6 +1203,7 @@ class MCPHttpClient:
                 request_headers=self.request_headers,
                 protocol_version=self.protocol_version,
                 timeout_s=self.timeout_s,
+                tool_timeout_s=self.tool_timeout_s,
             )
             result = await self._client.initialize()
 
@@ -1326,7 +1414,12 @@ class MCPStdioClient:
                     except asyncio.TimeoutError as exc:
                         if cancel_on_timeout:
                             await self._handle_request_timeout(request_id)
-                        raise RuntimeError("MCP stdio tool call timed out.") from exc
+                            tool_name = str((params or {}).get("name") or "").strip()
+                            raise MCPToolCallTimeout(
+                                timeout_s,
+                                tool_name=tool_name,
+                            ) from exc
+                        raise RuntimeError("MCP stdio request timed out.") from exc
                 else:
                     msg = await _do_request()
 
@@ -1945,11 +2038,17 @@ async def execute_mcp_tool(
 
     if transport_type == "stdio":
         client = await MCPStdioProcessManager.instance().get_or_start(connection, user_id)
-        return await client.call_tool(
-            name=name,
-            arguments=arguments or {},
-            on_notification=on_notification,
-        )
+        try:
+            return await client.call_tool(
+                name=name,
+                arguments=arguments or {},
+                on_notification=on_notification,
+            )
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise MCPToolCallTimeout(
+                MCP_TOOL_CALL_TIMEOUT,
+                tool_name=name,
+            ) from exc
 
     url = connection.get("url") or ""
     if not url:
@@ -1959,15 +2058,28 @@ async def execute_mcp_tool(
         url,
         request_headers=_build_mcp_http_request_headers(connection, session_token),
         protocol_version=protocol_version,
-        timeout_s=MCP_TOOL_CALL_TIMEOUT,
+        timeout_s=AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA,
+        tool_timeout_s=MCP_TOOL_CALL_TIMEOUT,
     )
     try:
-        await client.initialize()
-        await client.notify_initialized()
-        return await client.call_tool(
-            name=name,
-            arguments=arguments or {},
-            on_notification=on_notification,
-        )
+        try:
+            await client.initialize()
+            await client.notify_initialized()
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise MCPConnectionTimeout(
+                AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA,
+            ) from exc
+
+        try:
+            return await client.call_tool(
+                name=name,
+                arguments=arguments or {},
+                on_notification=on_notification,
+            )
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            raise MCPToolCallTimeout(
+                MCP_TOOL_CALL_TIMEOUT,
+                tool_name=name,
+            ) from exc
     finally:
         await client.close()

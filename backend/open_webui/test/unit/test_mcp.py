@@ -1,7 +1,9 @@
 import asyncio
 import contextlib
 import json
+import os
 import pathlib
+import subprocess
 import sys
 import textwrap
 from types import SimpleNamespace
@@ -13,6 +15,26 @@ import pytest
 _BACKEND_DIR = pathlib.Path(__file__).resolve().parents[3]
 if str(_BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(_BACKEND_DIR))
+
+
+def test_mcp_tool_call_timeout_default_is_five_minutes():
+    env = os.environ.copy()
+    env.pop("MCP_TOOL_CALL_TIMEOUT", None)
+    env["PYTHONPATH"] = str(_BACKEND_DIR)
+
+    result = subprocess.run(
+        [
+            sys.executable,
+            "-c",
+            "from open_webui.env import MCP_TOOL_CALL_TIMEOUT; print(MCP_TOOL_CALL_TIMEOUT)",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    assert result.stdout.strip().splitlines()[-1] == "300"
 
 
 def test_mcp_streamable_http_client_json_and_sse():
@@ -131,6 +153,78 @@ def test_mcp_streamable_http_client_json_and_sse():
     assert all(h == "present-on-all-requests" for h in seen_custom_headers)
 
 
+def test_mcp_streamable_http_tool_call_uses_tool_timeout():
+    from aiohttp import web
+
+    from open_webui.utils.mcp import MCPStreamableHttpClient
+
+    async def handler(request: web.Request):
+        payload = await request.json()
+        method = payload.get("method")
+
+        if method == "initialize":
+            return web.json_response(
+                {
+                    "jsonrpc": "2.0",
+                    "id": payload.get("id"),
+                    "result": {
+                        "serverInfo": {"name": "TimeoutSplitMCP"},
+                        "capabilities": {"tools": {}},
+                    },
+                }
+            )
+
+        if method == "notifications/initialized":
+            return web.Response(status=200)
+
+        if method == "tools/list":
+            return web.json_response(
+                {
+                    "jsonrpc": "2.0",
+                    "id": payload.get("id"),
+                    "result": {
+                        "tools": [{"name": "slow", "inputSchema": {"type": "object"}}]
+                    },
+                }
+            )
+
+        if method == "tools/call":
+            await asyncio.sleep(0.35)
+            return web.json_response(
+                {
+                    "jsonrpc": "2.0",
+                    "id": payload.get("id"),
+                    "result": {"content": [{"type": "text", "text": "ok"}]},
+                }
+            )
+
+        return web.json_response({"jsonrpc": "2.0", "id": payload.get("id"), "result": {}})
+
+    async def run():
+        app = web.Application()
+        app.router.add_post("/", handler)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "127.0.0.1", 0)
+        await site.start()
+        port = site._server.sockets[0].getsockname()[1]
+        url = f"http://127.0.0.1:{port}/"
+
+        try:
+            client = MCPStreamableHttpClient(url, timeout_s=0.2, tool_timeout_s=1)
+            await client.initialize()
+            await client.notify_initialized()
+            tools = await client.list_tools()
+            assert tools[0]["name"] == "slow"
+
+            result = await client.call_tool("slow", {})
+            assert result["content"][0]["text"] == "ok"
+        finally:
+            await runner.cleanup()
+
+    asyncio.run(run())
+
+
 def test_get_tools_exposes_mcp_tool_and_routes_call(monkeypatch):
     # Avoid touching the tool DB layer.
     import open_webui.utils.tools as tools_mod
@@ -181,13 +275,13 @@ def test_get_tools_exposes_mcp_tool_and_routes_call(monkeypatch):
     user = SimpleNamespace(id="u1", role="admin")
 
     tools = tools_mod.get_tools(request, ["mcp:0"], user, extra_params={})
-    assert "mcp_0__foo_bar" in tools
-    spec = tools["mcp_0__foo_bar"]["spec"]
-    assert spec["name"] == "mcp_0__foo_bar"
+    assert "mcp_tool_0__foo_bar" in tools
+    spec = tools["mcp_tool_0__foo_bar"]["spec"]
+    assert spec["name"] == "mcp_tool_0__foo_bar"
     assert spec["parameters"]["type"] == "object"
 
     async def run():
-        out = await tools["mcp_0__foo_bar"]["callable"](a="x")
+        out = await tools["mcp_tool_0__foo_bar"]["callable"](a="x")
         return out
 
     out = asyncio.run(run())
@@ -195,6 +289,94 @@ def test_get_tools_exposes_mcp_tool_and_routes_call(monkeypatch):
     assert called["name"] == "foo/bar"
     assert called["arguments"] == {"a": "x"}
     assert called["session_token"] == "tok_abc"
+
+
+def test_get_tools_emits_mcp_keepalive_status_for_slow_call(monkeypatch):
+    import open_webui.utils.tools as tools_mod
+
+    monkeypatch.setattr(tools_mod.Tools, "get_tool_by_id", lambda _id: None)
+    monkeypatch.setattr(tools_mod, "MCP_TOOL_CALL_TIMEOUT", 300)
+
+    events = []
+    real_sleep = asyncio.sleep
+    second_keepalive_sleep = asyncio.Event()
+
+    async def fake_sleep(delay):
+        if delay == 20:
+            if not any(
+                event.get("data", {}).get("action") == "mcp_tool_execution"
+                and event.get("data", {}).get("done") is False
+                for event in events
+            ):
+                await real_sleep(0)
+                return
+            await second_keepalive_sleep.wait()
+        await real_sleep(delay)
+
+    monkeypatch.setattr(tools_mod.asyncio, "sleep", fake_sleep)
+
+    async def fake_execute_mcp_tool(connection, *, name, arguments, **_kwargs):
+        while not any(
+            event.get("data", {}).get("action") == "mcp_tool_execution"
+            and event.get("data", {}).get("done") is False
+            for event in events
+        ):
+            await real_sleep(0)
+        return {"ok": True}
+
+    monkeypatch.setattr(tools_mod, "execute_mcp_tool", fake_execute_mcp_tool)
+
+    request = SimpleNamespace(
+        app=SimpleNamespace(
+            state=SimpleNamespace(
+                config=SimpleNamespace(
+                    MCP_SERVER_CONNECTIONS=[{"url": "http://mcp.local", "auth_type": "none"}],
+                    TOOL_SERVER_CONNECTIONS=[],
+                ),
+                MCP_SERVERS=[
+                    {
+                        "idx": 0,
+                        "url": "http://mcp.local",
+                        "server_info": {"name": "TestMCP"},
+                        "tools": [
+                            {
+                                "name": "slow/tool",
+                                "description": "desc",
+                                "inputSchema": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    }
+                ],
+                TOOL_SERVERS=[],
+            )
+        ),
+        state=SimpleNamespace(token=SimpleNamespace(credentials="tok_abc")),
+    )
+    user = SimpleNamespace(id="u1", role="admin")
+
+    async def event_emitter(event):
+        events.append(event)
+
+    async def run():
+        tools = tools_mod.get_tools(request, ["mcp:0"], user, extra_params={})
+        return await tools["mcp_tool_0__slow_tool"]["callable"](
+            __event_emitter__=event_emitter
+        )
+
+    out = asyncio.run(run())
+
+    assert out == {"ok": True}
+    assert any(
+        event["data"]["action"] == "mcp_tool_execution"
+        and event["data"]["done"] is False
+        and "最长等待 5 分钟" in event["data"]["description"]
+        for event in events
+    )
+    assert events[-1]["data"] == {
+        "action": "mcp_tool_execution",
+        "description": "MCP 工具「slow/tool」执行结束",
+        "done": True,
+    }
 
 
 def test_tools_route_prefers_custom_mcp_title_and_description(monkeypatch):
@@ -435,6 +617,7 @@ def test_http_client_falls_back_to_legacy_sse_transport():
                 )
             )
         elif method == "tools/call":
+            await asyncio.sleep(0.35)
             await outbound_events.put(
                 (
                     "message",
@@ -473,7 +656,7 @@ def test_http_client_falls_back_to_legacy_sse_transport():
         port = site._server.sockets[0].getsockname()[1]
         url = f"http://127.0.0.1:{port}/sse"
 
-        client = MCPHttpClient(url)
+        client = MCPHttpClient(url, timeout_s=0.2, tool_timeout_s=1)
         try:
             init = await client.initialize()
             assert init.get("serverInfo", {}).get("name") == "LegacySSE"
@@ -509,6 +692,136 @@ def test_http_client_falls_back_to_legacy_sse_transport():
         "tools/list",
         "tools/call",
     ]
+
+
+def test_execute_mcp_tool_uses_short_connection_timeout_and_long_tool_timeout(monkeypatch):
+    from open_webui.utils import mcp as mcp_mod
+
+    captured = {}
+
+    class FakeMCPHttpClient:
+        def __init__(self, url, *, request_headers=None, protocol_version=None, timeout_s=None, tool_timeout_s=None):
+            captured["init"] = {
+                "url": url,
+                "request_headers": request_headers,
+                "protocol_version": protocol_version,
+                "timeout_s": timeout_s,
+                "tool_timeout_s": tool_timeout_s,
+            }
+
+        async def initialize(self):
+            captured["initialized"] = True
+            return {}
+
+        async def notify_initialized(self):
+            captured["notified"] = True
+
+        async def call_tool(self, *, name, arguments, on_notification=None):
+            captured["call"] = {
+                "name": name,
+                "arguments": arguments,
+                "on_notification": on_notification,
+            }
+            return {"ok": True}
+
+        async def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(mcp_mod, "MCP_TOOL_CALL_TIMEOUT", 300)
+    monkeypatch.setattr(mcp_mod, "MCPHttpClient", FakeMCPHttpClient)
+
+    async def run():
+        return await mcp_mod.execute_mcp_tool(
+            {"transport_type": "http", "url": "http://mcp.local"},
+            name="slow",
+            arguments={"a": "x"},
+        )
+
+    assert asyncio.run(run()) == {"ok": True}
+    assert captured["init"]["timeout_s"] == mcp_mod.AIOHTTP_CLIENT_TIMEOUT_TOOL_SERVER_DATA
+    assert captured["init"]["tool_timeout_s"] == 300
+    assert captured["call"]["name"] == "slow"
+    assert captured["call"]["arguments"] == {"a": "x"}
+    assert captured["closed"] is True
+
+
+def test_execute_mcp_tool_reports_connection_timeout_separately(monkeypatch):
+    from open_webui.utils import mcp as mcp_mod
+
+    captured = {}
+
+    class FakeMCPHttpClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def initialize(self):
+            raise asyncio.TimeoutError()
+
+        async def notify_initialized(self):
+            captured["notified"] = True
+
+        async def call_tool(self, **_kwargs):
+            captured["called"] = True
+            return {}
+
+        async def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(mcp_mod, "MCPHttpClient", FakeMCPHttpClient)
+
+    async def run():
+        with pytest.raises(mcp_mod.MCPConnectionTimeout, match="服务器连接超过"):
+            await mcp_mod.execute_mcp_tool(
+                {"transport_type": "http", "url": "http://mcp.local"},
+                name="slow",
+                arguments={},
+            )
+
+    asyncio.run(run())
+    assert "notified" not in captured
+    assert "called" not in captured
+    assert captured["closed"] is True
+
+
+def test_execute_mcp_tool_reports_tool_timeout_with_tool_name(monkeypatch):
+    from open_webui.utils import mcp as mcp_mod
+
+    captured = {}
+
+    class FakeMCPHttpClient:
+        def __init__(self, *_args, **_kwargs):
+            pass
+
+        async def initialize(self):
+            return {}
+
+        async def notify_initialized(self):
+            captured["notified"] = True
+
+        async def call_tool(self, **_kwargs):
+            raise asyncio.TimeoutError()
+
+        async def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(mcp_mod, "MCP_TOOL_CALL_TIMEOUT", 300)
+    monkeypatch.setattr(mcp_mod, "MCPHttpClient", FakeMCPHttpClient)
+
+    async def run():
+        with pytest.raises(
+            mcp_mod.MCPToolCallTimeout,
+            match="MCP 工具「slow」执行超过 5 分钟",
+        ) as exc_info:
+            await mcp_mod.execute_mcp_tool(
+                {"transport_type": "http", "url": "http://mcp.local"},
+                name="slow",
+                arguments={},
+            )
+        assert exc_info.value.tool_name == "slow"
+
+    asyncio.run(run())
+    assert captured["notified"] is True
+    assert captured["closed"] is True
 
 
 def _write_stdio_server(tmp_path, script_name: str, body: str) -> str:
@@ -667,8 +980,12 @@ def test_mcp_stdio_timeout_marks_client_tainted_and_manager_rebuilds(tmp_path, m
 
         try:
             client1 = await manager.get_or_start(connection, "user-1")
-            with pytest.raises(RuntimeError, match="timed out"):
+            with pytest.raises(
+                mcp_mod.MCPToolCallTimeout,
+                match="MCP 工具「sleep」执行超过 1 秒",
+            ) as exc_info:
                 await client1.call_tool("sleep", {})
+            assert exc_info.value.tool_name == "sleep"
             assert client1.tainted is True
 
             client2 = await manager.get_or_start(connection, "user-1")
@@ -790,7 +1107,7 @@ def test_mcp_server_connection_normalizes_http_headers_and_drops_stdio_headers()
         url="http://example.com",
         headers={
             " X-Api-Key ": "abc",
-            "X-Trace": 123,
+            "X-Trace": "123",
             "": "ignored",
         },
     )
@@ -1062,7 +1379,7 @@ def test_mcp_servers_config_get_includes_runtime_capabilities(monkeypatch):
     async def run():
         return await configs_router.get_mcp_servers_config(
             SimpleNamespace(),
-            SimpleNamespace(role="admin"),
+            SimpleNamespace(id="u1", role="admin"),
         )
 
     result = asyncio.run(run())
@@ -1102,7 +1419,7 @@ def test_mcp_servers_config_post_includes_runtime_capabilities(monkeypatch):
         return await configs_router.set_mcp_servers_config(
             SimpleNamespace(),
             form_data,
-            user=SimpleNamespace(role="admin"),
+            user=SimpleNamespace(id="u1", role="admin"),
         )
 
     result = asyncio.run(run())
@@ -1140,7 +1457,7 @@ def test_mcp_servers_config_post_round_trips_headers(monkeypatch):
         return await configs_router.set_mcp_servers_config(
             SimpleNamespace(),
             form_data,
-            user=SimpleNamespace(role="admin"),
+            user=SimpleNamespace(id="u1", role="admin"),
         )
 
     result = asyncio.run(run())

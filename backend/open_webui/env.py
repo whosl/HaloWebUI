@@ -493,12 +493,12 @@ MCP_STDIO_ALLOWED_COMMANDS = os.environ.get(
     "npx,node,python,python3,uvx,uv,deno",
 )
 
-MCP_TOOL_CALL_TIMEOUT = os.environ.get("MCP_TOOL_CALL_TIMEOUT", "30")
+MCP_TOOL_CALL_TIMEOUT = os.environ.get("MCP_TOOL_CALL_TIMEOUT", "300")
 
 try:
     MCP_TOOL_CALL_TIMEOUT = int(MCP_TOOL_CALL_TIMEOUT)
 except Exception:
-    MCP_TOOL_CALL_TIMEOUT = 30
+    MCP_TOOL_CALL_TIMEOUT = 300
 
 ####################################
 # TOOL SERVER SSL

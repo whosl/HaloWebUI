@@ -5824,6 +5824,41 @@ async def process_chat_response(
             # Accumulate usage (token counts) across all LLM rounds so the
             # frontend info button can display them even after tool orchestration.
             accumulated_usage: dict = {}
+            response_stopped_by_user = False
+            last_stop_check_at = 0.0
+
+            class ResponseStoppedByUser(Exception):
+                pass
+
+            def is_response_message_stopped(message: Optional[dict]) -> bool:
+                return bool(
+                    isinstance(message, dict)
+                    and (
+                        message.get("stopped") is True
+                        or message.get("stoppedByUser") is True
+                    )
+                )
+
+            def response_was_stopped_by_user(force: bool = False) -> bool:
+                nonlocal response_stopped_by_user, last_stop_check_at
+                if response_stopped_by_user:
+                    return True
+
+                now = time.monotonic()
+                if not force and now - last_stop_check_at < 0.5:
+                    return False
+
+                last_stop_check_at = now
+                try:
+                    current_message = Chats.get_message_by_id_and_message_id(
+                        metadata["chat_id"], metadata["message_id"]
+                    )
+                except Exception as e:
+                    log.debug(f"Failed to check stream cancellation state: {e}")
+                    return False
+
+                response_stopped_by_user = is_response_message_stopped(current_message)
+                return response_stopped_by_user
 
             def _merge_usage(incoming: dict) -> None:
                 """Merge *incoming* usage dict into accumulated_usage (in-place)."""
@@ -5996,6 +6031,14 @@ async def process_chat_response(
                         _stream_response_status = None
 
                     async for line in response.body_iterator:
+                        if response_was_stopped_by_user():
+                            log.info(
+                                "Stream response stopped by user; skipping remaining chunks for chat_id=%s message_id=%s",
+                                metadata["chat_id"],
+                                metadata["message_id"],
+                            )
+                            break
+
                         line = line.decode("utf-8") if isinstance(line, bytes) else line
                         data = line
                         _stream_line_count += 1
@@ -6517,6 +6560,14 @@ async def process_chat_response(
                                                 content_blocks,
                                             )
                                         )
+
+                                    if response_was_stopped_by_user(force=True):
+                                        log.info(
+                                            "Stream response stopped by user before persistence; chat_id=%s message_id=%s",
+                                            metadata["chat_id"],
+                                            metadata["message_id"],
+                                        )
+                                        break
 
                                     if ENABLE_REALTIME_CHAT_SAVE:
                                         # Save message in the database
@@ -9127,6 +9178,15 @@ async def process_chat_response(
 
                 title = Chats.get_chat_title_by_id(metadata["chat_id"])
 
+                if response_was_stopped_by_user(force=True):
+                    set_current_task_blocks_completion(False)
+                    log.info(
+                        "Stream response already stopped by user; skipping final persistence for chat_id=%s message_id=%s",
+                        metadata["chat_id"],
+                        metadata["message_id"],
+                    )
+                    raise ResponseStoppedByUser()
+
                 # Detect empty response (model returned 200 but no content).
                 # Common with reverse proxies / relay services that swallow errors.
                 if not finalize_error_payload and not _has_visible_assistant_output(
@@ -9284,36 +9344,31 @@ async def process_chat_response(
                 )
 
                 await background_tasks_handler()
+            except ResponseStoppedByUser:
+                pass
             except asyncio.CancelledError:
                 log.warning("Task was cancelled!")
                 await event_emitter({"type": "task-cancelled"})
 
-                if accumulated_usage and ENABLE_REALTIME_CHAT_SAVE:
-                    try:
-                        Chats.upsert_message_to_chat_by_id_and_message_id(
-                            metadata["chat_id"],
-                            metadata["message_id"],
-                            {
-                                "usage": accumulated_usage,
-                            },
-                        )
-                    except Exception as e:
-                        log.warning(
-                            f"Failed to persist usage for analytics on cancel: {e}"
-                        )
+                _cancel_payload = {
+                    "done": True,
+                    "stopped": True,
+                    "stoppedByUser": True,
+                    "completedAt": int(time.time()),
+                }
+                if not response_was_stopped_by_user(force=True):
+                    _cancel_payload["content"] = serialize_content_blocks(content_blocks)
+                if accumulated_usage:
+                    _cancel_payload["usage"] = accumulated_usage
 
-                if not ENABLE_REALTIME_CHAT_SAVE:
-                    # Save message in the database
-                    _cancel_payload = {
-                        "content": serialize_content_blocks(content_blocks),
-                    }
-                    if accumulated_usage:
-                        _cancel_payload["usage"] = accumulated_usage
+                try:
                     Chats.upsert_message_to_chat_by_id_and_message_id(
                         metadata["chat_id"],
                         metadata["message_id"],
                         _cancel_payload,
                     )
+                except Exception as e:
+                    log.warning(f"Failed to persist stream cancellation metadata: {e}")
 
             if response.background is not None:
                 await response.background()

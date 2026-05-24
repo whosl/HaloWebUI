@@ -849,6 +849,7 @@
 	}
 
 	let taskIds = null;
+	let stoppedResponseMessageIds = new Set<string>();
 	let messageQueue: { id: string; prompt: string; files: any[] }[] = [];
 	let branchingMessageId: string | null = null;
 
@@ -2310,7 +2311,25 @@
 				const type = event?.data?.type ?? null;
 				const data = event?.data?.data ?? null;
 
-				if (type === 'status') {
+				if (type === 'task-cancelled') {
+					await markResponseMessagesStopped(message.id);
+				} else if (
+					(isResponseStopped(message) || stoppedResponseMessageIds.has(message.id)) &&
+					[
+						'chat:message:delta',
+						'message',
+						'chat:message',
+						'replace',
+						'chat:message:files',
+						'files',
+						'chat:message:follow_ups',
+						'source',
+						'citation',
+						'status'
+					].includes(type)
+				) {
+					return;
+				} else if (type === 'status') {
 					if (message?.statusHistory) {
 						message.statusHistory.push(data);
 					} else {
@@ -3276,13 +3295,14 @@
 
 		if (hasPendingTask) {
 			for (const [messageId, message] of Object.entries(history.messages)) {
-				if (message?.role === 'assistant' && message.done === false) {
+				if (message?.role === 'assistant' && message.done === false && !isResponseStopped(message)) {
 					pendingAssistantIds.add(messageId);
 				}
 			}
 
 			const currentMessage = history.currentId ? history.messages[history.currentId] : null;
-			if (currentMessage?.role === 'assistant') {
+			const currentMessageStopped = isResponseStopped(currentMessage);
+			if (currentMessage?.role === 'assistant' && !currentMessageStopped) {
 				pendingAssistantIds.add(currentMessage.id);
 
 				const parentMessage = currentMessage.parentId
@@ -3290,15 +3310,15 @@
 					: null;
 				for (const siblingId of parentMessage?.childrenIds ?? []) {
 					const sibling = history.messages[siblingId];
-					if (sibling?.role === 'assistant' && sibling.done !== true) {
+					if (sibling?.role === 'assistant' && sibling.done !== true && !isResponseStopped(sibling)) {
 						pendingAssistantIds.add(siblingId);
 					}
 				}
 			}
 
-			if (pendingAssistantIds.size === 0) {
+			if (pendingAssistantIds.size === 0 && !currentMessageStopped) {
 				const latestAssistantEntry = Object.entries(history.messages)
-					.filter(([, message]) => message?.role === 'assistant')
+					.filter(([, message]) => message?.role === 'assistant' && !isResponseStopped(message))
 					.sort(([, a], [, b]) => (a?.timestamp ?? 0) - (b?.timestamp ?? 0))
 					.at(-1);
 
@@ -3307,22 +3327,27 @@
 				}
 			}
 		}
+		const hasActivePendingResponse = hasPendingTask && pendingAssistantIds.size > 0;
 
 		for (const [messageId, message] of Object.entries(history.messages)) {
 			if (message?.role !== 'assistant') {
 				continue;
 			}
 
-			if (hasPendingTask && pendingAssistantIds.has(messageId)) {
+			if (hasActivePendingResponse && pendingAssistantIds.has(messageId)) {
 				message.done = false;
 			} else {
 				message.done = true;
 			}
 		}
 
+		if (!hasActivePendingResponse) {
+			taskIds = null;
+		}
+
 		activeChatIds.update((ids) => {
 			const next = new Set(ids);
-			if (hasPendingTask && $chatId) {
+			if (hasActivePendingResponse && $chatId) {
 				next.add($chatId);
 			} else {
 				next.delete($chatId);
@@ -4120,8 +4145,85 @@
 		pendingGeminiImages.delete(messageId);
 	};
 
+	const getHistoryMessage = (messageId: string | null | undefined) =>
+		messageId ? ((history.messages ?? {}) as Record<string, any>)?.[messageId] : null;
+
+	const isResponseStopped = (message: any) => message?.stopped === true || message?.stoppedByUser === true;
+
+	const markResponseMessagesStopped = async (targetMessageId: string | null = null) => {
+		const currentMessage = targetMessageId
+			? getHistoryMessage(targetMessageId)
+			: history.currentId
+				? getHistoryMessage(history.currentId)
+				: null;
+		const responseMessageIds = new Set<string>();
+		const messages = (history.messages ?? {}) as Record<string, any>;
+
+		if (currentMessage?.role === 'assistant') {
+			if (targetMessageId || currentMessage.done !== true || isResponseStopped(currentMessage)) {
+				responseMessageIds.add(currentMessage.id);
+			}
+
+			const parentMessage = getHistoryMessage(currentMessage.parentId);
+			for (const siblingId of parentMessage?.childrenIds ?? []) {
+				const sibling = getHistoryMessage(siblingId);
+				if (sibling?.role === 'assistant' && sibling.done !== true && !isResponseStopped(sibling)) {
+					responseMessageIds.add(siblingId);
+				}
+			}
+		} else {
+			for (const childId of currentMessage?.childrenIds ?? []) {
+				const child = getHistoryMessage(childId);
+				if (child?.role === 'assistant' && child.done !== true && !isResponseStopped(child)) {
+					responseMessageIds.add(childId);
+				}
+			}
+		}
+
+		if (responseMessageIds.size === 0) {
+			return;
+		}
+
+		const completedAt = Date.now() / 1000;
+		for (const messageId of responseMessageIds) {
+			const message = getHistoryMessage(messageId);
+			if (!message) continue;
+
+			stoppedResponseMessageIds.add(messageId);
+			await releaseResponseAnimationController(messageId);
+			clearPendingGeminiImages(messageId, true);
+
+			messages[messageId] = {
+				...message,
+				done: true,
+				stopped: true,
+				stoppedByUser: true,
+				completedAt
+			};
+		}
+		stoppedResponseMessageIds = new Set(stoppedResponseMessageIds);
+		history = history;
+
+		activeChatIds.update((ids) => {
+			const next = new Set(ids);
+			next.delete($chatId);
+			return next;
+		});
+
+		if ($chatId && $chatId !== 'local') {
+			await saveChatHandler($chatId, history);
+		}
+	};
+
 	const chatCompletionEventHandler = async (data, message, chatId) => {
 		const { id, done, choices, content, sources, error, usage, files } = data;
+		if (isResponseStopped(message) || stoppedResponseMessageIds.has(message?.id)) {
+			if (done) {
+				stoppedResponseMessageIds.delete(message.id);
+				stoppedResponseMessageIds = new Set(stoppedResponseMessageIds);
+			}
+			return;
+		}
 
 		if (files) {
 			message.files = mergeMessageFiles(message.files, files);
@@ -4837,10 +4939,17 @@
 		if (res) {
 			if (res.error) {
 				await handleOpenAIError(res.error, responseMessage);
+			} else if (stoppedResponseMessageIds.has(responseMessageId) || isResponseStopped(responseMessage)) {
+				if (res.task_id) {
+					await stopTask(localStorage.token, res.task_id).catch((error) => {
+						toast.error(`${error}`);
+						return null;
+					});
+				}
 			} else {
-				if (taskIds) {
+				if (res.task_id && taskIds) {
 					taskIds.push(res.task_id);
-				} else {
+				} else if (res.task_id) {
 					taskIds = [res.task_id];
 				}
 			}
@@ -5208,28 +5317,22 @@
 	};
 
 	const stopResponse = async () => {
-		if (taskIds) {
-			for (const taskId of taskIds) {
+		const currentTaskIds = Array.isArray(taskIds) ? [...taskIds] : [];
+
+		await markResponseMessagesStopped();
+		taskIds = null;
+
+		for (const taskId of currentTaskIds) {
+			if (taskId) {
 				const res = await stopTask(localStorage.token, taskId).catch((error) => {
 					toast.error(`${error}`);
 					return null;
 				});
 			}
+		}
 
-			taskIds = null;
-
-			const responseMessage = history.messages[history.currentId];
-			// Set all response messages to done
-			for (const messageId of history.messages[responseMessage.parentId].childrenIds) {
-				history.messages[messageId].done = true;
-				history.messages[messageId].completedAt = Date.now() / 1000;
-			}
-
-			history.messages[history.currentId] = responseMessage;
-
-			if (autoScroll) {
-				scrollToBottom();
-			}
+		if (autoScroll) {
+			scrollToBottom();
 		}
 	};
 
