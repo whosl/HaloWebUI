@@ -16,7 +16,7 @@ from bs4 import BeautifulSoup, NavigableString, Tag
 from fpdf import FPDF
 from PIL import Image
 
-from open_webui.env import STATIC_DIR, FONTS_DIR
+from open_webui.env import OPEN_WEBUI_DIR, STATIC_DIR, FONTS_DIR
 from open_webui.models.chats import ChatTitleMessagesForm
 from open_webui.utils.chat_image_refs import resolve_chat_image_url_to_bytes
 
@@ -1125,6 +1125,7 @@ class PDFGenerator:
     def _iter_font_dirs(self) -> list[Path]:
         candidates = [
             Path(FONTS_DIR),
+            OPEN_WEBUI_DIR / "fonts",
             STATIC_DIR / "fonts",
             STATIC_DIR / "assets" / "fonts",
         ]
