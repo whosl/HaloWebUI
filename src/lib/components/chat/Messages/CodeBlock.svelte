@@ -2,12 +2,16 @@
 	import { v4 as uuidv4 } from 'uuid';
 
 	import { getContext, onMount, tick, onDestroy } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	import type { i18n as i18nType } from 'i18next';
 	import { copyToClipboard } from '$lib/utils';
 
 	import CodeEditor from '$lib/components/common/CodeEditor.svelte';
 	import SvgPanZoom from '$lib/components/common/SVGPanZoom.svelte';
 	import {
 		Check,
+		ChevronDown,
+		ChevronUp,
 		ChevronsUpDown,
 		Copy,
 		LoaderCircle,
@@ -41,29 +45,41 @@
 		renderMermaidSvg
 	} from '$lib/utils/lobehub-chat-appearance';
 
-	const i18n = getContext('i18n');
+	const i18n = getContext<Writable<i18nType>>('i18n');
+
+	type ExecutionFile = {
+		type: string;
+		data: string;
+	};
+
+	type CodeToken = {
+		raw?: string;
+		text?: string;
+		[key: string]: unknown;
+	};
 
 	export let id = '';
 
-	export let onSave = (e) => {};
-	export let onCode = (e) => {};
+	export let onSave: (value: string) => void = () => {};
+	export let onCode: (value: { lang: string; code: string }) => void = () => {};
 
 	export let save = false;
 	export let run = true;
 	export let collapsed = false;
 
-	export let token;
+	export let token: CodeToken | null = null;
 	export let lang = '';
 	export let code = '';
 	export let messageId = '';
 
 	$: langIcon = getLanguageIcon(lang);
-	export let attributes = {};
+	export let attributes: { output?: string } = {};
 
 	export let className = 'my-2';
 	export let editorClassName = '';
+	export let stickyButtonsClassName = 'top-0';
 
-	let pyodideWorker = null;
+	let pyodideWorker: Worker | null = null;
 
 	let _code = '';
 	$: if (code) {
@@ -74,16 +90,20 @@
 		_code = code;
 	};
 
-	let _token = null;
+	const updateEditorCode = (value?: string) => {
+		_code = value ?? '';
+	};
+
+	let _token: CodeToken | null = null;
 	let mermaidThemeId = DEFAULT_MERMAID_THEME;
 
-	let mermaidHtml = null;
+	let mermaidHtml: string | null = null;
 	let executing = false;
 
-	let stdout = null;
-	let stderr = null;
-	let result = null;
-	let files = null;
+	let stdout: unknown = null;
+	let stderr: unknown = null;
+	let result: unknown = null;
+	let files: ExecutionFile[] = [];
 
 	let copied = false;
 	let saved = false;
@@ -100,6 +120,7 @@
 	$: needsCollapse = codeNaturalHeight > MAX_COLLAPSED_HEIGHT;
 
 	const collapseCodeBlock = () => {
+		if (!needsCollapse) return;
 		collapsed = !collapsed;
 	};
 
@@ -161,7 +182,7 @@
 		}, 1000);
 	};
 
-	const checkPythonCode = (str) => {
+	const checkPythonCode = (str: string) => {
 		// Check if the string contains typical Python syntax characters
 		const pythonSyntax = [
 			'def ',
@@ -196,80 +217,105 @@
 		return false;
 	};
 
-	const executePython = async (code) => {
+	const hasOwn = (value: unknown, key: string) =>
+		Object.prototype.hasOwnProperty.call(value ?? {}, key);
+
+	const getOutputImageType = (data: unknown) => {
+		const match = typeof data === 'string' ? data.match(/^data:(image\/[^;]+);base64,/) : null;
+		return match?.[1] ?? 'image/png';
+	};
+
+	const appendOutputImage = (data: string) => {
+		files = [
+			...files,
+			{
+				type: getOutputImageType(data),
+				data
+			}
+		];
+	};
+
+	const extractInlineImages = (value: unknown) => {
+		if (typeof value !== 'string') {
+			return value;
+		}
+
+		const visibleLines = [];
+		let changed = false;
+
+		for (const line of value.split('\n')) {
+			const trimmedLine = line.trim();
+			if (trimmedLine.startsWith('data:image/') && trimmedLine.includes(';base64,')) {
+				appendOutputImage(trimmedLine);
+				changed = true;
+			} else {
+				visibleLines.push(line);
+			}
+		}
+
+		return changed ? visibleLines.join('\n').trimEnd() : value;
+	};
+
+	const formatResult = (value: unknown) => {
+		if (typeof value === 'string') {
+			return value;
+		}
+
+		try {
+			return JSON.stringify(value, null, 2) ?? `${value}`;
+		} catch {
+			return `${value}`;
+		}
+	};
+
+	const resetExecutionFeedback = () => {
 		result = null;
 		stdout = null;
 		stderr = null;
+		files = [];
+	};
+
+	const applyExecutionOutput = (output: unknown) => {
+		if (!output || typeof output !== 'object') return;
+		const data = output as Record<string, unknown>;
+
+		if (hasOwn(data, 'stdout') && data['stdout'] !== null) {
+			stdout = extractInlineImages(data['stdout']);
+		}
+
+		if (hasOwn(data, 'result') && data['result'] !== null) {
+			result = extractInlineImages(data['result']);
+		}
+
+		if (hasOwn(data, 'stderr') && data['stderr'] !== null) {
+			stderr = data['stderr'];
+		}
+	};
+
+	$: hasStdout = stdout !== null && stdout !== undefined && `${stdout}` !== '';
+	$: hasStderr = stderr !== null && stderr !== undefined && `${stderr}` !== '';
+	$: hasOutputText = hasStdout || hasStderr;
+	$: hasResult = result !== null && result !== undefined && result !== '';
+	$: hasFiles = files.length > 0;
+	$: hasExecutionFeedback = executing || hasOutputText || hasResult || hasFiles;
+	$: sourceIsCollapsed = collapsed && needsCollapse;
+	$: codeExecutionEnabled =
+		((($config as any)?.features?.enable_code_execution as boolean | undefined) ?? true) === true;
+
+	const executePython = async (code: string) => {
+		resetExecutionFeedback();
 
 		executing = true;
 
-		if ($config?.code?.engine === 'jupyter') {
+		const currentConfig = $config as any;
+
+		if (currentConfig?.code?.engine === 'jupyter') {
 			const output = await executeCode(localStorage.token, code).catch((error) => {
 				toast.error(`${error}`);
 				return null;
 			});
 
-			if (output) {
-				if (output['stdout']) {
-					stdout = output['stdout'];
-					const stdoutLines = stdout.split('\n');
-
-					for (const [idx, line] of stdoutLines.entries()) {
-						if (line.startsWith('data:image/png;base64')) {
-							if (files) {
-								files.push({
-									type: 'image/png',
-									data: line
-								});
-							} else {
-								files = [
-									{
-										type: 'image/png',
-										data: line
-									}
-								];
-							}
-
-							if (stdout.startsWith(`${line}\n`)) {
-								stdout = stdout.replace(`${line}\n`, ``);
-							} else if (stdout.startsWith(`${line}`)) {
-								stdout = stdout.replace(`${line}`, ``);
-							}
-						}
-					}
-				}
-
-				if (output['result']) {
-					result = output['result'];
-					const resultLines = result.split('\n');
-
-					for (const [idx, line] of resultLines.entries()) {
-						if (line.startsWith('data:image/png;base64')) {
-							if (files) {
-								files.push({
-									type: 'image/png',
-									data: line
-								});
-							} else {
-								files = [
-									{
-										type: 'image/png',
-										data: line
-									}
-								];
-							}
-
-							if (result.startsWith(`${line}\n`)) {
-								result = result.replace(`${line}\n`, ``);
-							} else if (result.startsWith(`${line}`)) {
-								result = result.replace(`${line}`, ``);
-							}
-						}
-					}
-				}
-
-				output['stderr'] && (stderr = output['stderr']);
-			}
+			applyExecutionOutput(output);
 
 			executing = false;
 		} else {
@@ -277,7 +323,7 @@
 		}
 	};
 
-	const executePythonAsWorker = async (code) => {
+	const executePythonAsWorker = async (code: string) => {
 		if (!canUsePyodideRuntime()) {
 			stderr = PYODIDE_DISABLED_MESSAGE;
 			executing = false;
@@ -295,9 +341,10 @@
 		}
 
 		const { default: PyodideWorker } = await import('$lib/workers/pyodide.worker?worker');
-		pyodideWorker = new PyodideWorker();
+		const worker = new PyodideWorker();
+		pyodideWorker = worker;
 
-		pyodideWorker.postMessage({
+		worker.postMessage({
 			id: id,
 			code: code,
 			packages: packages
@@ -307,83 +354,30 @@
 			if (executing) {
 				executing = false;
 				stderr = 'Execution Time Limit Exceeded';
-				pyodideWorker.terminate();
+				worker.terminate();
 			}
 		}, 60000);
 
-		pyodideWorker.onmessage = (event) => {
+		worker.onmessage = (event) => {
 			const { id, ...data } = event.data;
 			clearTimeout(executionTimeout);
 
-			if (data['stdout']) {
-				stdout = data['stdout'];
-				const stdoutLines = stdout.split('\n');
-
-				for (const [idx, line] of stdoutLines.entries()) {
-					if (line.startsWith('data:image/png;base64')) {
-						if (files) {
-							files.push({
-								type: 'image/png',
-								data: line
-							});
-						} else {
-							files = [
-								{
-									type: 'image/png',
-									data: line
-								}
-							];
-						}
-
-						if (stdout.startsWith(`${line}\n`)) {
-							stdout = stdout.replace(`${line}\n`, ``);
-						} else if (stdout.startsWith(`${line}`)) {
-							stdout = stdout.replace(`${line}`, ``);
-						}
-					}
-				}
-			}
-
-			if (data['result']) {
-				result = data['result'];
-				const resultLines = result.split('\n');
-
-				for (const [idx, line] of resultLines.entries()) {
-					if (line.startsWith('data:image/png;base64')) {
-						if (files) {
-							files.push({
-								type: 'image/png',
-								data: line
-							});
-						} else {
-							files = [
-								{
-									type: 'image/png',
-									data: line
-								}
-							];
-						}
-
-						if (result.startsWith(`${line}\n`)) {
-							result = result.replace(`${line}\n`, ``);
-						} else if (result.startsWith(`${line}`)) {
-							result = result.replace(`${line}`, ``);
-						}
-					}
-				}
-			}
-
-			data['stderr'] && (stderr = data['stderr']);
-			data['result'] && (result = data['result']);
+			applyExecutionOutput(data);
 
 			executing = false;
-			pyodideWorker.terminate();
+			worker.terminate();
+			if (pyodideWorker === worker) {
+				pyodideWorker = null;
+			}
 		};
 
-		pyodideWorker.onerror = () => {
+		worker.onerror = () => {
 			clearTimeout(executionTimeout);
 			executing = false;
-			pyodideWorker.terminate();
+			worker.terminate();
+			if (pyodideWorker === worker) {
+				pyodideWorker = null;
+			}
 		};
 	};
 
@@ -397,11 +391,11 @@
 				isDark: document.documentElement.classList.contains('dark'),
 				themeId: mermaidThemeId
 			});
-			} catch (error) {
-				console.error('Error:', error);
-				mermaidHtml = null;
-			}
-		};
+		} catch (error) {
+			console.error('Error:', error);
+			mermaidHtml = null;
+		}
+	};
 
 	const render = async () => {
 		if (lang === 'mermaid' && (token?.raw ?? '').slice(-4).includes('```')) {
@@ -431,7 +425,7 @@
 	const onAttributesUpdate = () => {
 		if (attributes?.output) {
 			// Create a helper function to unescape HTML entities
-			const unescapeHtml = (html) => {
+			const unescapeHtml = (html: string) => {
 				const textArea = document.createElement('textarea');
 				textArea.innerHTML = html;
 				return textArea.value;
@@ -444,10 +438,8 @@
 				// Parse the unescaped string into JSON
 				const output = JSON.parse(unescapedOutput);
 
-				// Assign the parsed values to variables
-				stdout = output.stdout;
-				stderr = output.stderr;
-				result = output.result;
+				resetExecutionFeedback();
+				applyExecutionOutput(output);
 			} catch (error) {
 				console.error('Error:', error);
 			}
@@ -500,26 +492,42 @@
 				<SvgPanZoom
 					className=" border border-gray-100 dark:border-gray-850 rounded-lg max-h-fit overflow-hidden"
 					svg={mermaidHtml}
-					content={_token.text}
+					content={_token?.text ?? ''}
 				/>
 			{:else}
 				<pre class="mermaid">{code}</pre>
 			{/if}
 		{:else}
 			<div
-				class="sticky top-0 left-0 right-0 z-10 flex items-center justify-between px-3 py-1.5 min-h-[36px] bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800 cursor-pointer"
-				on:click={collapseCodeBlock}
+				class="sticky {stickyButtonsClassName} left-0 right-0 z-10 flex items-center justify-between gap-2 px-3 py-1.5 min-h-[36px] bg-white dark:bg-gray-900 text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800"
 			>
-				<div class="flex items-center gap-2">
-					<span class="size-4 flex-shrink-0" aria-hidden="true">
-						{@html langIcon.svg}
-					</span>
-					<span class="text-[13px] font-medium text-gray-600 dark:text-gray-400">
-						{langIcon.label}
-					</span>
-				</div>
-				<div class="flex items-center gap-1" on:click|stopPropagation>
-					{#if ($config?.features?.enable_code_execution ?? true) && (lang.toLowerCase() === 'python' || lang.toLowerCase() === 'py' || (lang === '' && checkPythonCode(code)))}
+				{#if needsCollapse}
+					<button
+						type="button"
+						class="min-w-0 flex flex-1 items-center gap-2 rounded-md text-left cursor-pointer hover:text-gray-700 dark:hover:text-gray-200"
+						on:click={collapseCodeBlock}
+						aria-expanded={!sourceIsCollapsed}
+						title={sourceIsCollapsed ? $i18n.t('Expand') : $i18n.t('Collapse')}
+					>
+						<span class="size-4 flex-shrink-0" aria-hidden="true">
+							{@html langIcon.svg}
+						</span>
+						<span class="truncate text-[13px] font-medium text-gray-600 dark:text-gray-400">
+							{langIcon.label}
+						</span>
+					</button>
+				{:else}
+					<div class="min-w-0 flex flex-1 items-center gap-2 rounded-md">
+						<span class="size-4 flex-shrink-0" aria-hidden="true">
+							{@html langIcon.svg}
+						</span>
+						<span class="truncate text-[13px] font-medium text-gray-600 dark:text-gray-400">
+							{langIcon.label}
+						</span>
+					</div>
+				{/if}
+				<div class="flex shrink-0 items-center gap-1">
+					{#if codeExecutionEnabled && (lang.toLowerCase() === 'python' || lang.toLowerCase() === 'py' || (lang === '' && checkPythonCode(code)))}
 						{#if executing}
 							<div
 								class="inline-flex items-center text-gray-400 dark:text-gray-500 p-1.5 rounded-md"
@@ -529,6 +537,7 @@
 							</div>
 						{:else if run}
 							<button
+								type="button"
 								class="inline-flex items-center text-gray-400 dark:text-gray-500 hover:text-green-600 dark:hover:text-green-400 p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition"
 								on:click={async () => {
 									code = _code;
@@ -544,6 +553,7 @@
 
 					{#if messageId && isIframePreviewable(lang)}
 						<button
+							type="button"
 							class="inline-flex items-center text-gray-400 dark:text-gray-500 hover:text-sky-600 dark:hover:text-sky-400 p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition"
 							on:click={openIframePreview}
 							title={$i18n.t('Open preview')}
@@ -554,6 +564,7 @@
 
 					{#if isSvgPreviewable(lang, code)}
 						<button
+							type="button"
 							class="inline-flex items-center text-gray-400 dark:text-gray-500 hover:text-sky-600 dark:hover:text-sky-400 p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition"
 							on:click={previewSvg}
 							title={`${$i18n.t('Preview')} SVG`}
@@ -564,19 +575,21 @@
 
 					{#if save}
 						<button
+							type="button"
 							class="inline-flex items-center text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-white p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition"
 							on:click={saveCode}
 							title={$i18n.t('Save')}
 						>
 							{#if saved}
-									<Check class="size-[17.5px] text-green-500" size={17.5} strokeWidth={2.15} />
-								{:else}
-									<Save class="size-[17.5px]" size={17.5} strokeWidth={1.95} />
-								{/if}
+								<Check class="size-[17.5px] text-green-500" size={17.5} strokeWidth={2.15} />
+							{:else}
+								<Save class="size-[17.5px]" size={17.5} strokeWidth={1.95} />
+							{/if}
 						</button>
 					{/if}
 
 					<button
+						type="button"
 						class="inline-flex items-center text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-white p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition"
 						on:click={copyCode}
 						title={$i18n.t('Copy')}
@@ -588,18 +601,23 @@
 						{/if}
 					</button>
 
-					<button
-						class="inline-flex items-center text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-white p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition"
-						on:click={collapseCodeBlock}
-						title={collapsed ? $i18n.t('Expand') : $i18n.t('Collapse')}
-					>
-						<ChevronsUpDown class="size-4" size={16} strokeWidth={2.1} />
-					</button>
+					{#if needsCollapse}
+						<button
+							type="button"
+							class="inline-flex items-center text-gray-400 dark:text-gray-500 hover:text-gray-700 dark:hover:text-white p-1.5 rounded-md hover:bg-gray-100 dark:hover:bg-gray-800 transition"
+							on:click={collapseCodeBlock}
+							title={sourceIsCollapsed ? $i18n.t('Expand') : $i18n.t('Collapse')}
+						>
+							<ChevronsUpDown class="size-4" size={16} strokeWidth={2.1} />
+						</button>
+					{/if}
 				</div>
 			</div>
 
 			{#if showPyodideConsent}
-				<div class="border-b border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+				<div
+					class="border-b border-amber-200 bg-amber-50 px-3 py-3 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200"
+				>
 					<div class="font-medium">
 						{$i18n.t('浏览器 Python 运行时未准备就绪', {
 							defaultValue: 'Browser Python runtime is not ready'
@@ -649,134 +667,135 @@
 					: executing || stdout || stderr || result
 						? ''
 						: ''} font-mono"
-				style={collapsed && needsCollapse ? `max-height: ${MAX_COLLAPSED_HEIGHT}px; overflow-y: auto;` : ''}
+				style={sourceIsCollapsed ? `max-height: ${MAX_COLLAPSED_HEIGHT}px; overflow-y: auto;` : ''}
 			>
-				<CodeEditor
-					value={code}
-					{id}
-					{lang}
-					onSave={() => {
-						saveCode();
-					}}
-					onChange={(value) => {
-						_code = value;
-					}}
-				/>
+				<CodeEditor value={code} {id} {lang} onSave={saveCode} onChange={updateEditorCode} />
 			</div>
 
 			{#if needsCollapse}
 				<button
+					type="button"
 					class="w-full flex items-center justify-center gap-1.5 py-1.5 text-xs text-gray-400 dark:text-gray-500 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-900 border-t border-gray-200 dark:border-gray-800 transition-colors"
 					on:click={collapseCodeBlock}
 				>
 					{#if collapsed}
-						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3.5">
-							<path fill-rule="evenodd" d="M5.22 8.22a.75.75 0 0 1 1.06 0L10 11.94l3.72-3.72a.75.75 0 1 1 1.06 1.06l-4.25 4.25a.75.75 0 0 1-1.06 0L5.22 9.28a.75.75 0 0 1 0-1.06Z" clip-rule="evenodd" />
-						</svg>
-							{$i18n.t('Expand')} ({code.split('\n').length})
+						<ChevronDown class="size-3.5" size={14} strokeWidth={2.2} />
+						{$i18n.t('Expand')} ({code.split('\n').length})
 					{:else}
-						<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20" fill="currentColor" class="size-3.5">
-							<path fill-rule="evenodd" d="M14.78 11.78a.75.75 0 0 1-1.06 0L10 8.06l-3.72 3.72a.75.75 0 0 1-1.06-1.06l4.25-4.25a.75.75 0 0 1 1.06 0l4.25 4.25a.75.75 0 0 1 0 1.06Z" clip-rule="evenodd" />
-						</svg>
+						<ChevronUp class="size-3.5" size={14} strokeWidth={2.2} />
 						{$i18n.t('Collapse')}
 					{/if}
 				</button>
 			{/if}
 
-			{#if !collapsed}
-				<div
-					id="plt-canvas-{id}"
-					class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 max-w-full overflow-x-auto scrollbar-hidden"
-				></div>
+			<div
+				id="plt-canvas-{id}"
+				class="bg-gray-50 dark:bg-gray-900 text-gray-800 dark:text-gray-200 max-w-full overflow-x-auto scrollbar-hidden"
+			></div>
 
-				{#if executing || stdout || stderr || result || files}
-					<div
-						class="bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-200 border-t border-gray-100 dark:border-gray-800/50 py-3 px-4 flex flex-col gap-3"
-					>
-						{#if executing}
-							<div>
-								<div
-									class="inline-flex items-center gap-2 rounded-lg bg-gray-100 dark:bg-gray-800/50 px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 mb-2"
-								>
-									{$i18n.t('Output')}
-								</div>
-								<div class="text-sm flex items-center gap-2 text-gray-500">
-									<svg
-										class="animate-spin size-3.5"
-										xmlns="http://www.w3.org/2000/svg"
-										fill="none"
-										viewBox="0 0 24 24"
-									>
-										<circle
-											class="opacity-25"
-											cx="12"
-											cy="12"
-											r="10"
-											stroke="currentColor"
-											stroke-width="4"
-										></circle>
-										<path
-											class="opacity-75"
-											fill="currentColor"
-											d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-										></path>
-									</svg>
-									{$i18n.t('Running...')}
-								</div>
-							</div>
-						{:else}
-							{#if stdout || stderr}
-								<div>
+			{#if hasExecutionFeedback}
+				<div
+					class="bg-gray-50 dark:bg-gray-900/50 text-gray-800 dark:text-gray-200 border-t border-gray-100 dark:border-gray-800/50 py-3 px-4 flex flex-col gap-3"
+				>
+					<div class="flex items-center justify-between gap-3">
+						<div
+							class="inline-flex items-center gap-2 rounded-full bg-white dark:bg-gray-950 px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-100 dark:border-gray-800"
+						>
+							{#if executing}
+								<LoaderCircle
+									class="size-3.5 animate-spin text-gray-400"
+									size={14}
+									strokeWidth={2.2}
+								/>
+							{:else if stderr}
+								<span class="size-1.5 rounded-full bg-rose-500"></span>
+							{:else}
+								<span class="size-1.5 rounded-full bg-emerald-500"></span>
+							{/if}
+							{$i18n.t('Output')}
+						</div>
+
+						{#if sourceIsCollapsed}
+							<button
+								type="button"
+								class="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-gray-500 hover:text-gray-700 hover:bg-white dark:text-gray-400 dark:hover:text-gray-200 dark:hover:bg-gray-950 border border-transparent hover:border-gray-100 dark:hover:border-gray-800 transition-colors"
+								on:click={collapseCodeBlock}
+							>
+								{$i18n.t('Expand')} ({code.split('\n').length})
+							</button>
+						{/if}
+					</div>
+
+					{#if executing}
+						<div class="text-sm flex items-center gap-2 text-gray-500 dark:text-gray-400">
+							<LoaderCircle class="size-3.5 animate-spin" size={14} strokeWidth={2.2} />
+							{$i18n.t('Running...')}
+						</div>
+					{:else}
+						{#if hasOutputText}
+							<div class="flex flex-col gap-2">
+								{#if hasStdout}
 									<div
-										class="inline-flex items-center gap-2 rounded-lg bg-gray-100 dark:bg-gray-800/50 px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 mb-2"
-									>
-										{$i18n.t('Output')}
-									</div>
-									<div
-										class="text-sm leading-6 font-mono whitespace-pre-wrap bg-white dark:bg-gray-950 rounded-lg p-3 border border-gray-100 dark:border-gray-800 {stdout?.split(
+										class="text-sm leading-6 font-mono whitespace-pre-wrap bg-white dark:bg-gray-950 rounded-lg p-3 border border-gray-100 dark:border-gray-800 {`${stdout}`.split(
 											'\n'
-										)?.length > 100
+										).length > 100
 											? `max-h-96`
 											: ''} overflow-y-auto"
 										style="font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;"
 									>
-										{stdout || stderr}
+										{stdout}
 									</div>
-								</div>
-							{/if}
-							{#if result || files}
-								<div>
+								{/if}
+
+								{#if hasStderr}
 									<div
-										class="inline-flex items-center gap-2 rounded-lg bg-gray-100 dark:bg-gray-800/50 px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 mb-2"
+										class="text-sm leading-6 font-mono whitespace-pre-wrap bg-white dark:bg-gray-950 rounded-lg p-3 border border-rose-100 text-rose-700 dark:border-rose-900/60 dark:text-rose-200 {`${stderr}`.split(
+											'\n'
+										).length > 100
+											? `max-h-96`
+											: ''} overflow-y-auto"
+										style="font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;"
 									>
-										{$i18n.t('Result')}
+										{stderr}
 									</div>
-									{#if result}
-										<div
-											class="text-sm leading-6 font-mono bg-white dark:bg-gray-950 rounded-lg p-3 border border-gray-100 dark:border-gray-800"
-											style="font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;"
-										>
-											{`${JSON.stringify(result)}`}
-										</div>
-									{/if}
-									{#if files}
-										<div class="flex flex-col gap-2 mt-2">
-											{#each files as file}
-												{#if file.type.startsWith('image')}
-													<img
-														src={file.data}
-														alt="Output"
-														class="w-full max-w-[36rem] rounded-lg border border-gray-100 dark:border-gray-800"
-													/>
-												{/if}
-											{/each}
-										</div>
-									{/if}
-								</div>
-							{/if}
+								{/if}
+							</div>
 						{/if}
-					</div>
-				{/if}
+
+						{#if hasResult || hasFiles}
+							<div class="flex flex-col gap-2">
+								<div
+									class="inline-flex w-fit items-center gap-2 rounded-full bg-white dark:bg-gray-950 px-2.5 py-1 text-xs font-medium text-gray-600 dark:text-gray-300 border border-gray-100 dark:border-gray-800"
+								>
+									{$i18n.t('Result')}
+								</div>
+
+								{#if hasResult}
+									<div
+										class="text-sm leading-6 font-mono whitespace-pre-wrap bg-white dark:bg-gray-950 rounded-lg p-3 border border-gray-100 dark:border-gray-800 overflow-x-auto"
+										style="font-family: 'JetBrains Mono', 'Fira Code', Consolas, monospace;"
+									>
+										{formatResult(result)}
+									</div>
+								{/if}
+
+								{#if hasFiles}
+									<div class="flex flex-col gap-2">
+										{#each files as file}
+											{#if file.type.startsWith('image')}
+												<img
+													src={file.data}
+													alt="Output"
+													class="w-full max-w-[36rem] rounded-lg border border-gray-100 dark:border-gray-800 bg-white dark:bg-gray-950"
+												/>
+											{/if}
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/if}
+					{/if}
+				</div>
 			{/if}
 		{/if}
 	</div>
