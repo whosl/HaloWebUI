@@ -103,6 +103,7 @@
 		buildWebSearchModeOptions,
 		resolveConfiguredDefaultWebSearchMode
 	} from '$lib/utils/native-web-search';
+	import { hasVisibleMessageFiles as messageHasVisibleFiles } from '$lib/utils/chat-message-errors';
 
 	import { generateChatCompletion } from '$lib/apis/ollama';
 	import {
@@ -3336,6 +3337,8 @@
 
 			if (hasActivePendingResponse && pendingAssistantIds.has(messageId)) {
 				message.done = false;
+			} else if (!hasActivePendingResponse && isUnresolvedEmptyAssistantMessage(message)) {
+				markUnresolvedEmptyAssistantMessage(message);
 			} else {
 				message.done = true;
 			}
@@ -4149,6 +4152,42 @@
 		messageId ? ((history.messages ?? {}) as Record<string, any>)?.[messageId] : null;
 
 	const isResponseStopped = (message: any) => message?.stopped === true || message?.stoppedByUser === true;
+
+	const isUnresolvedEmptyAssistantMessage = (message: any) => {
+		if (message?.role !== 'assistant' || isResponseStopped(message)) {
+			return false;
+		}
+
+		if (`${message?.content ?? ''}`.trim() || message?.error || message?.completedAt) {
+			return false;
+		}
+
+		if (messageHasVisibleFiles(message?.files)) {
+			return false;
+		}
+
+		const statuses = Array.isArray(message?.statusHistory)
+			? message.statusHistory
+			: message?.status
+				? [message.status]
+				: [];
+
+		return statuses.some((status) => status?.done === false && !status?.hidden);
+	};
+
+	const markUnresolvedEmptyAssistantMessage = (message: any) => {
+		message.done = true;
+		message.error = {
+			type: 'generation_interrupted',
+			title: $i18n.t('Generation was interrupted. Please retry.'),
+			body: $i18n.t(
+				'This reply started but did not receive a final response from the backend. It has been closed so the chat will not stay stuck.'
+			),
+			content: $i18n.t('Generation was interrupted. Please retry.'),
+			reasons: ['api_upstream_error', 'proxy_error'],
+			suggestion: 'retry_or_switch'
+		};
+	};
 
 	const markResponseMessagesStopped = async (targetMessageId: string | null = null) => {
 		const currentMessage = targetMessageId

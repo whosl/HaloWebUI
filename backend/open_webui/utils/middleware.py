@@ -5910,6 +5910,8 @@ async def process_chat_response(
 
                 return existing + incoming
 
+            response_finalized = False
+
             try:
                 for event in events:
                     await event_emitter(
@@ -9241,8 +9243,17 @@ async def process_chat_response(
                 # which should not make the refreshed UI think the last assistant
                 # message is still streaming.
                 set_current_task_blocks_completion(False)
+                response_finalized = True
 
-                # Send a webhook notification if the user is not active
+                await event_emitter(
+                    {
+                        "type": "chat:completion",
+                        "data": data,
+                    }
+                )
+
+                # Send a webhook notification if the user is not active. This is
+                # post-response work and must never delay the live chat completion event.
                 if get_active_status_by_user_id(user.id) is None:
                     webhook_url = Users.get_user_webhook_url_by_id(user.id)
                     if webhook_url:
@@ -9257,13 +9268,6 @@ async def process_chat_response(
                                 "url": f"{request.app.state.config.WEBUI_URL}/c/{metadata['chat_id']}",
                             },
                         )
-
-                await event_emitter(
-                    {
-                        "type": "chat:completion",
-                        "data": data,
-                    }
-                )
 
                 await background_tasks_handler()
             except asyncio.CancelledError:
@@ -9286,6 +9290,51 @@ async def process_chat_response(
                     )
                 except Exception as e:
                     log.warning(f"Failed to persist stream cancellation metadata: {e}")
+            except Exception as e:
+                log.exception("Chat response background task failed")
+
+                if not response_finalized:
+                    completed_at = int(time.time())
+                    error_payload = {
+                        "type": "generation_interrupted",
+                        "title": "生成回复时发生错误，请重试。",
+                        "body": "请求已经开始，但后台生成任务在返回完整结果前中断。当前回复已经结束，不会继续卡在生成中。",
+                        "content": "生成回复时发生错误，请重试。",
+                        "reasons": ["api_upstream_error", "proxy_error"],
+                        "suggestion": "retry_or_switch",
+                        "raw_message": _truncate_text(str(e), 4000),
+                    }
+                    completion_payload = {
+                        "done": True,
+                        "content": serialize_content_blocks(content_blocks),
+                        "completedAt": completed_at,
+                        "error": error_payload,
+                        **({"files": message_files} if message_files else {}),
+                    }
+                    if accumulated_usage:
+                        completion_payload["usage"] = accumulated_usage
+
+                    set_current_task_blocks_completion(False)
+
+                    try:
+                        await event_emitter(
+                            {
+                                "type": "chat:completion",
+                                "data": completion_payload,
+                            }
+                        )
+                    except Exception as emit_error:
+                        log.warning(
+                            "Failed to emit stream failure completion: %s", emit_error
+                        )
+
+                    try:
+                        upsert_response_message(completion_payload)
+                    except Exception as persist_error:
+                        log.warning(
+                            "Failed to persist stream failure completion: %s",
+                            persist_error,
+                        )
 
             if response.background is not None:
                 await response.background()

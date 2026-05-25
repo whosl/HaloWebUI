@@ -1233,6 +1233,8 @@
 	"Model Params": "模型参数",
 	"Model Permissions": "模型权限",
 	"Model returned an empty response. Try resending or switching models.": "模型返回了空响应，请尝试重新发送或切换其他模型。",
+	"Generation was interrupted. Please retry.": "生成已中断，请重试。",
+	"This reply started but did not receive a final response from the backend. It has been closed so the chat will not stay stuck.": "这条回复已经开始生成，但后端没有返回最终结果。系统已结束它，避免对话继续卡在生成中。",
 	"Response stopped.": "响应已停止。",
 	"Upstream image generation completed but returned no images.": "图片服务已成功返回，但响应里没有实际图片数据。",
 	"This model only accepts aspect ratio requests. {{size}} will be sent as {{ratio}}, not as an exact pixel size.": "这个模型只接受画面比例请求。{{size}} 会按 {{ratio}} 发送，而不是精确像素尺寸。",
