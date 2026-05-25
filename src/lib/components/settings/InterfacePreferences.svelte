@@ -17,6 +17,7 @@
 	import { updateUserInfo } from '$lib/apis/users';
 	import { getUserPosition } from '$lib/utils';
 	import { getLanguages, changeLanguage, translateWithDefault } from '$lib/i18n';
+	import { resolveCopyFormattedPreference } from '$lib/utils/copy-format';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import { getModelSelectionId, resolveModelSelectionId } from '$lib/utils/model-identity';
 	import {
@@ -169,7 +170,7 @@
 	let showFormattingToolbar = false;
 	let insertPromptAsRichText = false;
 	let ctrlEnterToSend = false;
-	let copyFormatted = false;
+	let copyFormatted = true;
 	let largeTextAsFile = false;
 	let globalSystemPrompt = '';
 
@@ -228,7 +229,6 @@
 			showFormattingToolbar: boolean;
 			insertPromptAsRichText: boolean;
 			largeTextAsFile: boolean;
-			copyFormatted: boolean;
 			ctrlEnterToSend: boolean;
 			globalSystemPrompt: string;
 			promptSuggestions: any[];
@@ -249,6 +249,7 @@
 			showInlineCitations: boolean;
 			showMessageOutline: boolean;
 			showFormulaQuickCopyButton: boolean;
+			copyFormatted: boolean;
 			expandDetails: boolean;
 			insertSuggestionPrompt: boolean;
 			keepFollowUpPrompts: boolean;
@@ -530,7 +531,6 @@
 			showFormattingToolbar,
 			insertPromptAsRichText,
 			largeTextAsFile,
-			copyFormatted,
 			ctrlEnterToSend,
 			globalSystemPrompt,
 			promptSuggestions
@@ -552,6 +552,7 @@
 			showInlineCitations,
 			showMessageOutline,
 			showFormulaQuickCopyButton,
+			copyFormatted,
 			expandDetails,
 			insertSuggestionPrompt,
 			keepFollowUpPrompts,
@@ -610,7 +611,6 @@
 		showFormattingToolbar = snapshot.showFormattingToolbar;
 		insertPromptAsRichText = snapshot.insertPromptAsRichText;
 		largeTextAsFile = snapshot.largeTextAsFile;
-		copyFormatted = snapshot.copyFormatted;
 		ctrlEnterToSend = snapshot.ctrlEnterToSend;
 		globalSystemPrompt = snapshot.globalSystemPrompt;
 		promptSuggestions = snapshot.promptSuggestions;
@@ -632,6 +632,7 @@
 		showInlineCitations = snapshot.showInlineCitations;
 		showMessageOutline = snapshot.showMessageOutline;
 		showFormulaQuickCopyButton = snapshot.showFormulaQuickCopyButton;
+		copyFormatted = snapshot.copyFormatted;
 		expandDetails = snapshot.expandDetails;
 		insertSuggestionPrompt = snapshot.insertSuggestionPrompt;
 		keepFollowUpPrompts = snapshot.keepFollowUpPrompts;
@@ -682,7 +683,6 @@
 		showFormattingToolbar;
 		insertPromptAsRichText;
 		largeTextAsFile;
-		copyFormatted;
 		ctrlEnterToSend;
 		globalSystemPrompt;
 		promptSuggestions;
@@ -703,6 +703,7 @@
 		showInlineCitations;
 		showMessageOutline;
 		showFormulaQuickCopyButton;
+		copyFormatted;
 		expandDetails;
 		insertSuggestionPrompt;
 		keepFollowUpPrompts;
@@ -951,7 +952,6 @@
 				showFormattingToolbar,
 				insertPromptAsRichText,
 				largeTextAsFile,
-				copyFormatted,
 				ctrlEnterToSend,
 				system: globalSystemPrompt.trim() ? globalSystemPrompt : ''
 			});
@@ -1001,6 +1001,8 @@
 				showInlineCitations,
 				showMessageOutline,
 				showFormulaQuickCopyButton,
+				copyFormatted,
+				copyFormattedUserSet: true,
 				expandDetails,
 				insertSuggestionPrompt,
 				keepFollowUpPrompts,
@@ -1186,7 +1188,7 @@
 		showFormattingToolbar = $settings?.showFormattingToolbar ?? false;
 		insertPromptAsRichText = $settings?.insertPromptAsRichText ?? false;
 		largeTextAsFile = $settings?.largeTextAsFile ?? false;
-		copyFormatted = $settings?.copyFormatted ?? false;
+		copyFormatted = resolveCopyFormattedPreference($settings);
 		globalSystemPrompt = $settings?.system ?? '';
 
 		collapseCodeBlocks = $settings?.collapseCodeBlocks ?? false;
@@ -1850,14 +1852,6 @@
 										</div>
 										<div class="flex items-center justify-between glass-item px-4 py-3">
 											<div class="text-sm font-medium">
-												{$i18n.t('Copy Formatted Text')}
-											</div>
-											<Switch
-												bind:state={copyFormatted}
-											/>
-										</div>
-										<div class="flex items-center justify-between glass-item px-4 py-3">
-											<div class="text-sm font-medium">
 												{$i18n.t('Enter Key Behavior')}
 											</div>
 											<HaloSelect
@@ -2204,6 +2198,14 @@
 											</div>
 											<Switch
 												bind:state={showFormulaQuickCopyButton}
+											/>
+										</div>
+										<div class="flex items-center justify-between glass-item px-4 py-3">
+											<div class="text-sm font-medium">
+												{$i18n.t('Copy Formatted Text')}
+											</div>
+											<Switch
+												bind:state={copyFormatted}
 											/>
 										</div>
 										<div class="flex items-center justify-between glass-item px-4 py-3">

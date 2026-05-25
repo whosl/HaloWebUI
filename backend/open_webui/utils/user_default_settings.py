@@ -24,6 +24,7 @@ ALLOWED_UI_BOOL_KEYS = {
     "insertPromptAsRichText",
     "largeTextAsFile",
     "copyFormatted",
+    "copyFormattedUserSet",
     "ctrlEnterToSend",
     "autoTags",
     "autoFollowUps",

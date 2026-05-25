@@ -409,7 +409,7 @@
 	"Copied to clipboard": "已复制到剪贴板",
 	"Copied!": "已复制！",
 	"Copy": "复制",
-	"Copy Formatted Text": "格式化粘贴文本",
+	"Copy Formatted Text": "复制时保留格式",
 	"Copy last code block": "复制最后一个代码块中的代码",
 	"Copy last response": "复制最后一次回复内容",
 	"Copy Link": "复制链接",

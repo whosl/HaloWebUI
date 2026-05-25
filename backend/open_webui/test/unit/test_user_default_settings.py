@@ -181,3 +181,30 @@ def test_new_user_default_settings_builds_for_new_non_admin_accounts():
     }
     assert pending_settings == settings
     assert build_new_user_settings_from_template(template, "admin") is None
+
+
+def test_new_user_default_settings_preserves_explicit_formatted_copy_preference():
+    template = sanitize_new_user_default_settings(
+        {
+            "enabled": True,
+            "roles": ["user"],
+            "ui": {
+                "copyFormatted": False,
+                "copyFormattedUserSet": True,
+            },
+            "tools": {"native_tools": {}},
+        }
+    )
+
+    assert template["ui"] == {
+        "copyFormatted": False,
+        "copyFormattedUserSet": True,
+    }
+
+    assert build_new_user_settings_from_template(template, "user") == {
+        "ui": {
+            "copyFormatted": False,
+            "copyFormattedUserSet": True,
+        },
+        "revision": 0,
+    }

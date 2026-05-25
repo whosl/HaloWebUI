@@ -240,7 +240,11 @@
 		boolRow(tr('格式工具栏', 'Formatting Toolbar'), 'showFormattingToolbar'),
 		boolRow(tr('插入提示词为富文本', 'Insert prompt as rich text'), 'insertPromptAsRichText'),
 		boolRow(tr('大段文本自动转文件', 'Large text as file'), 'largeTextAsFile'),
-		boolRow(tr('复制时保留格式', 'Copy formatted'), 'copyFormatted'),
+		boolRow(
+			tr('复制时保留格式', 'Copy formatted'),
+			'copyFormatted',
+			tr('关闭时，新用户会明确使用不保留格式的复制设置。', 'When off, new users explicitly copy without formatting.')
+		),
 		boolRow(tr('Ctrl+Enter 发送', 'Ctrl+Enter to send'), 'ctrlEnterToSend')
 	];
 

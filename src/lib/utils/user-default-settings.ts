@@ -15,6 +15,7 @@ type UserDefaultUiTemplate = {
 	insertPromptAsRichText: boolean;
 	largeTextAsFile: boolean;
 	copyFormatted: boolean;
+	copyFormattedUserSet: boolean;
 	ctrlEnterToSend: boolean;
 	system: string;
 	title: { auto: boolean };
@@ -63,7 +64,8 @@ export const DEFAULT_USER_DEFAULT_UI_TEMPLATE: UserDefaultUiTemplate = {
 	showFormattingToolbar: false,
 	insertPromptAsRichText: false,
 	largeTextAsFile: false,
-	copyFormatted: false,
+	copyFormatted: true,
+	copyFormattedUserSet: false,
 	ctrlEnterToSend: false,
 	system: '',
 	title: { auto: true },
@@ -101,6 +103,7 @@ const UI_BOOL_KEYS: UserDefaultUiBoolKey[] = [
 	'insertPromptAsRichText',
 	'largeTextAsFile',
 	'copyFormatted',
+	'copyFormattedUserSet',
 	'ctrlEnterToSend',
 	'autoTags',
 	'autoFollowUps',
@@ -209,6 +212,10 @@ export const buildNewUserDefaultSettingsPayload = (
 		if (!isEqual(nextValue, defaultUi[key])) {
 			ui[key] = nextValue;
 		}
+	}
+
+	if ('copyFormatted' in ui) {
+		ui.copyFormattedUserSet = true;
 	}
 
 	return {

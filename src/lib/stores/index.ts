@@ -278,6 +278,7 @@ type Settings = {
 	insertPromptAsRichText?: boolean;
 	ctrlEnterToSend?: boolean;
 	copyFormatted?: boolean;
+	copyFormattedUserSet?: boolean;
 	largeTextAsFile?: boolean;
 	webSearch?: null | 'always';
 	webSearchMode?: 'off' | 'halo' | 'native' | 'auto';

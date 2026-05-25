@@ -7,6 +7,7 @@
 	import { updateUserInfo } from '$lib/apis/users';
 	import { getUserPosition } from '$lib/utils';
 	import { translateWithDefault } from '$lib/i18n';
+	import { resolveCopyFormattedPreference } from '$lib/utils/copy-format';
 	const dispatch = createEventDispatcher();
 
 	const i18n = getContext('i18n');
@@ -46,7 +47,7 @@
 	let chatBubble = true;
 	let chatDirection: 'LTR' | 'RTL' | 'auto' = 'auto';
 	let ctrlEnterToSend = false;
-	let copyFormatted = false;
+	let copyFormatted = true;
 
 	let collapseCodeBlocks = false;
 	let collapseHistoricalLongResponses = true;
@@ -247,7 +248,7 @@
 
 	const toggleCopyFormatted = async () => {
 		copyFormatted = !copyFormatted;
-		saveSettings({ copyFormatted });
+		saveSettings({ copyFormatted, copyFormattedUserSet: true });
 	};
 
 	const toggleChangeChatDirection = async () => {
@@ -301,7 +302,7 @@
 		richTextInput = $settings.richTextInput ?? true;
 		promptAutocomplete = $settings.promptAutocomplete ?? false;
 		largeTextAsFile = $settings.largeTextAsFile ?? false;
-		copyFormatted = $settings.copyFormatted ?? false;
+		copyFormatted = resolveCopyFormattedPreference($settings);
 
 		collapseCodeBlocks = $settings.collapseCodeBlocks ?? false;
 		collapseHistoricalLongResponses = $settings.collapseHistoricalLongResponses ?? true;

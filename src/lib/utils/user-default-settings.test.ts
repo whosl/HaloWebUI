@@ -120,4 +120,22 @@ describe('user default settings helpers', () => {
 			tools: { native_tools: {} }
 		});
 	});
+
+	it('marks disabled formatted copy as an explicit default preference', () => {
+		const draft = normalizeNewUserDefaultSettings({
+			enabled: true,
+			roles: ['user'],
+			ui: {
+				copyFormatted: false
+			},
+			tools: { native_tools: {} }
+		});
+
+		const payload = buildNewUserDefaultSettingsPayload(draft);
+
+		expect(payload.ui).toEqual({
+			copyFormatted: false,
+			copyFormattedUserSet: true
+		});
+	});
 });

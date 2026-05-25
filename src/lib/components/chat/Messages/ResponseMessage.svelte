@@ -38,6 +38,7 @@
 	} from '$lib/utils';
 	import { WEBUI_BASE_URL } from '$lib/constants';
 	import { translateWithDefault } from '$lib/i18n';
+	import { resolveCopyFormattedPreference } from '$lib/utils/copy-format';
 	import { saveUserSettingsPatch } from '$lib/utils/user-settings';
 
 	import Name from './Name.svelte';
@@ -465,11 +466,6 @@
 	let showRegenerateMenu = false;
 	let regenerateInput = '';
 
-	type RenderedCopyPayload = {
-		text: string;
-		html?: string;
-	};
-
 	$: modelSupportsThinking = model?.info?.meta?.capabilities?.reasoning ?? false;
 
 	// [REACTION_FEATURE] Commented out - reaction feature disabled for now
@@ -603,30 +599,10 @@
 		);
 	};
 
-	const writeRenderedCopyPayload = async (payload: RenderedCopyPayload) => {
-		if (($settings?.copyFormatted ?? false) && payload.html) {
-			try {
-				const data = new ClipboardItem({
-					'text/html': new Blob([payload.html], { type: 'text/html' }),
-					'text/plain': new Blob([payload.text], { type: 'text/plain' })
-				});
-				await navigator.clipboard.write([data]);
-				return true;
-			} catch (error) {
-				console.error('Failed to copy rendered HTML content:', error);
-			}
-		}
-
-		return await _copyToClipboard(payload.text, $settings?.copyFormatted ?? false);
-	};
-
 	const copyToClipboard = async (text) => {
 		text = removeAllDetails(text);
 
-		const renderedPayload = contentRendererRef?.getCopyPayload?.();
-		const res = renderedPayload
-			? await writeRenderedCopyPayload(renderedPayload)
-			: await _copyToClipboard(text, $settings?.copyFormatted ?? false);
+		const res = await _copyToClipboard(text, resolveCopyFormattedPreference($settings));
 
 		if (res) {
 			toast.success($i18n.t('Copying to clipboard was successful!'));
