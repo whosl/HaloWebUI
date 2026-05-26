@@ -501,6 +501,10 @@ from open_webui.utils.chat import (
     chat_completed as chat_completed_handler,
     chat_action as chat_action_handler,
 )
+from open_webui.utils.multi_model_discussion import (
+    generate_multi_model_discussion_completion,
+    is_multi_model_discussion_enabled,
+)
 from open_webui.utils.middleware import (
     build_native_file_input_retry_notification,
     clear_native_file_input_remote_cache,
@@ -1692,6 +1696,17 @@ async def chat_completion(
                 model,
                 events,
                 tasks,
+            )
+
+        discussion = form_data.get("discussion")
+        if is_multi_model_discussion_enabled(discussion):
+            return await generate_multi_model_discussion_completion(
+                request,
+                form_data,
+                user,
+                metadata,
+                model,
+                discussion,
             )
 
         _emitter = get_event_emitter(metadata)

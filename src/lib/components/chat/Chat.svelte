@@ -401,7 +401,19 @@
 	let selectedModelIds = [];
 	$: selectedModelIds =
 		atSelectedModel !== undefined ? [getModelSelectionId(atSelectedModel)] : selectedModels;
+	const MULTI_MODEL_DISCUSSION_MAX_MODELS = 5;
+	const MULTI_MODEL_DISCUSSION_DEFAULT_ROUNDS = 2;
+	const MULTI_MODEL_DISCUSSION_MAX_ROUNDS = 5;
+	let multiModelDiscussionEnabled = false;
 	let activeAssistant: ChatAssistantSnapshot | null = null;
+
+	const getMultiModelDiscussionRounds = () => {
+		const parsed = Number($settings?.multiModelDiscussionRounds ?? MULTI_MODEL_DISCUSSION_DEFAULT_ROUNDS);
+		if (!Number.isFinite(parsed)) {
+			return MULTI_MODEL_DISCUSSION_DEFAULT_ROUNDS;
+		}
+		return Math.max(1, Math.min(Math.trunc(parsed), MULTI_MODEL_DISCUSSION_MAX_ROUNDS));
+	};
 
 	let selectedToolIds = [];
 	let toolSelectionTouched = false;
@@ -737,6 +749,51 @@
 
 	const getResolvedSelectedModelIds = () =>
 		selectedModelIds.filter((id): id is string => typeof id === 'string' && id.trim() !== '');
+
+	const getUniqueModelIds = (ids: string[] = []) =>
+		Array.from(new Set(ids.map((id) => `${id ?? ''}`.trim()).filter(Boolean)));
+
+	const getDiscussionParticipantIds = (ids: string[] = getResolvedSelectedModelIds()) =>
+		getUniqueModelIds(ids).slice(0, MULTI_MODEL_DISCUSSION_MAX_MODELS);
+
+	const getDiscussionParticipantPayload = (ids: string[]) =>
+		ids
+			.map((id) => {
+				const model = getModelById(id);
+				if (!model) return null;
+
+				return {
+					id: getModelRequestId(model),
+					name: getModelChatDisplayName(model) || model.id || id
+				};
+			})
+			.filter(Boolean) as { id: string; name: string }[];
+
+	const buildDiscussionRequestPayload = (participantIds: string[]) => {
+		const participants = getDiscussionParticipantPayload(participantIds);
+		const finalModel = participants[0];
+
+	return {
+		enabled: true,
+		participants: participants.map((participant) => participant.id),
+		rounds: getMultiModelDiscussionRounds(),
+		final_model: finalModel?.id,
+		strategy: 'debate_then_summarize'
+	};
+};
+
+	const buildInitialDiscussionState = (participantIds: string[]) => {
+		const participants = getDiscussionParticipantPayload(participantIds);
+		return {
+			enabled: true,
+			status: 'running',
+			participants,
+			rounds: [],
+			finalModel: participants[0] ?? null,
+			strategy: 'debate_then_summarize',
+			updatedAt: Math.floor(Date.now() / 1000)
+		};
+	};
 
 	const getSingleSelectedReasoningModel = (): Model | null => {
 		const ids = getResolvedSelectedModelIds();
@@ -1454,6 +1511,7 @@
 		tool_selection_touched: toolSelectionTouched,
 		selected_skill_ids: selectedSkillIds,
 		skill_selection_touched: skillSelectionTouched,
+		multi_model_discussion_enabled: multiModelDiscussionEnabled,
 		web_search_mode: webSearchMode,
 		web_search_mode_source: webSearchModeSource,
 		image_generation_enabled: imageGenerationEnabled,
@@ -1472,6 +1530,7 @@
 		toolSelectionTouched,
 		selectedSkillIds,
 		skillSelectionTouched,
+		multiModelDiscussionEnabled,
 		activeAssistant,
 		systemPrompt: typeof params?.system === 'string' ? params.system : null,
 		imageGenerationEnabled,
@@ -1496,6 +1555,8 @@
 			'selectedSkillIds',
 			'web_search_mode',
 			'webSearchMode',
+			'multi_model_discussion_enabled',
+			'multiModelDiscussionEnabled',
 			'image_generation_enabled',
 			'imageGenerationEnabled',
 			'code_interpreter_enabled',
@@ -1549,6 +1610,15 @@
 		});
 		webSearchMode = restoredWebSearchState.mode;
 		webSearchModeSource = restoredWebSearchState.source;
+
+		if (
+			state.multi_model_discussion_enabled !== undefined ||
+			state.multiModelDiscussionEnabled !== undefined
+		) {
+			multiModelDiscussionEnabled = Boolean(
+				state.multi_model_discussion_enabled ?? state.multiModelDiscussionEnabled
+			);
+		}
 
 		if (
 			state.image_generation_enabled !== undefined ||
@@ -2303,7 +2373,93 @@
 		saveChatHandler(_chatId, history);
 	};
 
+	const applyDiscussionEvent = (message: any, data: any) => {
+		if (!message || !data || typeof data !== 'object') {
+			return;
+		}
+
+		if (data.state && typeof data.state === 'object') {
+			message.discussion = structuredClone(data.state);
+			return;
+		}
+
+		const discussion = message.discussion ?? {
+			enabled: true,
+			status: data.status ?? 'running',
+			participants: [],
+			rounds: [],
+			updatedAt: Math.floor(Date.now() / 1000)
+		};
+
+		if (data.status) {
+			discussion.status = data.status;
+		}
+		if (data.participants) {
+			discussion.participants = data.participants;
+		}
+		if (data.finalModel) {
+			discussion.finalModel = data.finalModel;
+		}
+		if (data.strategy) {
+			discussion.strategy = data.strategy;
+		}
+		discussion.updatedAt = Math.floor(Date.now() / 1000);
+		message.discussion = discussion;
+	};
+
+	const sendChatDiag = (event: string, fields: Record<string, unknown> = {}) => {
+		try {
+			$socket?.emit('chat-diag', {
+				event,
+				...fields
+			});
+		} catch (diagError) {
+			console.warn('[CHAT_DIAG frontend_emit_failed]', diagError);
+		}
+	};
+
+	const notifyHistoryUpdated = () => {
+		// Socket handlers mutate nested message objects; invalidate the top-level binding
+		// so child message components re-render immediately.
+		history = history;
+	};
+
+	const commitHistoryMessage = (message: any) => {
+		if (!message?.id) {
+			return message;
+		}
+
+		history.messages[message.id] = message;
+		notifyHistoryUpdated();
+		return message;
+	};
+
 	const chatEventHandler = async (event, cb) => {
+		const eventType = event?.data?.type ?? null;
+		const eventData = event?.data?.data ?? null;
+		if (eventType === 'chat:completion' && eventData?.done === true) {
+			console.warn('[CHAT_DIAG frontend_event_seen]', {
+				eventChatId: event?.chat_id,
+				currentChatId: $chatId,
+				messageId: event?.message_id,
+				hasMessage: Boolean(history.messages?.[event?.message_id]),
+				messageDoneBefore: history.messages?.[event?.message_id]?.done,
+				dataKeys: Object.keys(eventData ?? {}),
+				contentLength: `${eventData?.content ?? ''}`.length,
+				activeTaskIds: taskIds
+			});
+			sendChatDiag('frontend_event_seen', {
+				eventChatId: event?.chat_id,
+				currentChatId: $chatId,
+				messageId: event?.message_id,
+				hasMessage: Boolean(history.messages?.[event?.message_id]),
+				messageDoneBefore: history.messages?.[event?.message_id]?.done,
+				dataKeys: Object.keys(eventData ?? {}),
+				contentLength: `${eventData?.content ?? ''}`.length,
+				activeTaskIds: taskIds
+			});
+		}
+
 		if (event.chat_id === $chatId) {
 			await tick();
 			let message = history.messages[event.message_id];
@@ -2311,9 +2467,11 @@
 			if (message) {
 				const type = event?.data?.type ?? null;
 				const data = event?.data?.data ?? null;
+				let shouldCommitMessage = true;
 
 				if (type === 'task-cancelled') {
 					await markResponseMessagesStopped(message.id);
+					shouldCommitMessage = false;
 				} else if (
 					(isResponseStopped(message) || stoppedResponseMessageIds.has(message.id)) &&
 					[
@@ -2336,8 +2494,14 @@
 					} else {
 						message.statusHistory = [data];
 					}
+				} else if (type === 'discussion') {
+					applyDiscussionEvent(message, data);
+					if (shouldAutoScrollOnStreaming()) {
+						scrollToBottom();
+					}
 				} else if (type === 'chat:completion') {
 					await chatCompletionEventHandler(data, message, event.chat_id);
+					shouldCommitMessage = false;
 				} else if (type === 'chat:message:delta' || type === 'message') {
 					getResponseAnimationController(message).enqueue(data.content ?? '');
 				} else if (type === 'chat:message' || type === 'replace') {
@@ -2433,7 +2597,9 @@
 					// no-op: unknown event type
 				}
 
-				history.messages[event.message_id] = message;
+				if (shouldCommitMessage) {
+					commitHistoryMessage(message);
+				}
 			}
 		}
 	};
@@ -3749,6 +3915,7 @@
 
 		if (res !== null && res.messages) {
 			// Update chat history with the new messages
+			let hasHistoryMessageUpdates = false;
 			for (const message of res.messages) {
 				if (message?.id) {
 					// Add null check for message and message.id
@@ -3759,7 +3926,12 @@
 							: {}),
 						...message
 					};
+					hasHistoryMessageUpdates = true;
 				}
+			}
+
+			if (hasHistoryMessageUpdates) {
+				notifyHistoryUpdated();
 			}
 		}
 
@@ -3774,6 +3946,8 @@
 		}
 
 		taskIds = null;
+		notifyHistoryUpdated();
+		await tick();
 
 		const parentId = history.messages[responseMessageId]?.parentId;
 		const hasPendingSibling =
@@ -4232,12 +4406,21 @@
 			await releaseResponseAnimationController(messageId);
 			clearPendingGeminiImages(messageId, true);
 
+			const stoppedDiscussion = message?.discussion?.enabled
+				? {
+						...message.discussion,
+						status: 'stopped',
+						updatedAt: Math.floor(completedAt)
+					}
+				: undefined;
+
 			messages[messageId] = {
 				...message,
 				done: true,
 				stopped: true,
 				stoppedByUser: true,
-				completedAt
+				completedAt,
+				...(stoppedDiscussion ? { discussion: stoppedDiscussion } : {})
 			};
 		}
 		stoppedResponseMessageIds = new Set(stoppedResponseMessageIds);
@@ -4255,9 +4438,46 @@
 	};
 
 	const chatCompletionEventHandler = async (data, message, chatId) => {
-		const { id, done, choices, content, sources, error, usage, files } = data;
+		const { id, done, choices, content, sources, error, usage, files, discussion } = data;
+		const isFinalCompletion = done === true;
+		if (isFinalCompletion) {
+			console.warn('[CHAT_DIAG frontend_completion_handler_start]', {
+				chatId,
+				messageId: message?.id,
+				messageDoneBefore: message?.done,
+				isStopped: isResponseStopped(message),
+				isInStoppedSet: stoppedResponseMessageIds.has(message?.id),
+				contentLength: `${content ?? ''}`.length,
+				hasError: Boolean(error),
+				activeTaskIds: taskIds
+			});
+			sendChatDiag('frontend_completion_handler_start', {
+				chatId,
+				messageId: message?.id,
+				messageDoneBefore: message?.done,
+				isStopped: isResponseStopped(message),
+				isInStoppedSet: stoppedResponseMessageIds.has(message?.id),
+				contentLength: `${content ?? ''}`.length,
+				hasError: Boolean(error),
+				activeTaskIds: taskIds
+			});
+		}
 		if (isResponseStopped(message) || stoppedResponseMessageIds.has(message?.id)) {
 			if (done) {
+				console.warn('[CHAT_DIAG frontend_completion_ignored_stopped]', {
+					chatId,
+					messageId: message?.id,
+					messageDoneBefore: message?.done,
+					isStopped: isResponseStopped(message),
+					activeTaskIds: taskIds
+				});
+				sendChatDiag('frontend_completion_ignored_stopped', {
+					chatId,
+					messageId: message?.id,
+					messageDoneBefore: message?.done,
+					isStopped: isResponseStopped(message),
+					activeTaskIds: taskIds
+				});
 				stoppedResponseMessageIds.delete(message.id);
 				stoppedResponseMessageIds = new Set(stoppedResponseMessageIds);
 			}
@@ -4269,6 +4489,10 @@
 			if (shouldAutoScrollOnStreaming()) {
 				scrollToBottom();
 			}
+		}
+
+		if (discussion) {
+			message.discussion = structuredClone(discussion);
 		}
 
 		if (error) {
@@ -4323,13 +4547,29 @@
 			message.usage = usage;
 		}
 
-		history.messages[message.id] = message;
+		commitHistoryMessage(message);
 
 		if (done) {
 			await releaseResponseAnimationController(message.id);
 			clearPendingGeminiImages(message.id, true);
 			message.done = true;
 			message.completedAt = Date.now() / 1000;
+			commitHistoryMessage(message);
+			await tick();
+			console.warn('[CHAT_DIAG frontend_completion_mark_done]', {
+				chatId,
+				messageId: message.id,
+				contentLength: `${message.content ?? ''}`.length,
+				completedAt: message.completedAt,
+				activeTaskIdsBeforeCompletedHandler: taskIds
+			});
+			sendChatDiag('frontend_completion_mark_done', {
+				chatId,
+				messageId: message.id,
+				contentLength: `${message.content ?? ''}`.length,
+				completedAt: message.completedAt,
+				activeTaskIdsBeforeCompletedHandler: taskIds
+			});
 
 			if ($settings.responseAutoCopy) {
 				copyToClipboard(message.content);
@@ -4369,13 +4609,42 @@
 				return new Set(ids);
 			});
 
-			history.messages[message.id] = message;
-			await chatCompletedHandler(
-				chatId,
-				message.model,
-				message.id,
-				createMessagesList(history, message.id)
-			);
+			try {
+				await chatCompletedHandler(
+					chatId,
+					message.model,
+					message.id,
+					createMessagesList(history, message.id)
+				);
+				console.warn('[CHAT_DIAG frontend_completed_handler_ok]', {
+					chatId,
+					messageId: message.id,
+					messageDoneAfter: history.messages?.[message.id]?.done,
+					activeTaskIdsAfterCompletedHandler: taskIds
+				});
+				sendChatDiag('frontend_completed_handler_ok', {
+					chatId,
+					messageId: message.id,
+					messageDoneAfter: history.messages?.[message.id]?.done,
+					activeTaskIdsAfterCompletedHandler: taskIds
+				});
+			} catch (completedHandlerError) {
+				console.error('[CHAT_DIAG frontend_completed_handler_failed]', {
+					chatId,
+					messageId: message.id,
+					messageDoneAfter: history.messages?.[message.id]?.done,
+					activeTaskIdsAfterFailure: taskIds,
+					error: completedHandlerError
+				});
+				sendChatDiag('frontend_completed_handler_failed', {
+					chatId,
+					messageId: message.id,
+					messageDoneAfter: history.messages?.[message.id]?.done,
+					activeTaskIdsAfterFailure: taskIds,
+					error: String(completedHandlerError)
+				});
+				throw completedHandlerError;
+			}
 		}
 
 		if (shouldAutoScrollOnStreaming()) {
@@ -4416,6 +4685,13 @@
 		}
 		if (JSON.stringify(selectedModels) !== JSON.stringify(_selectedModels)) {
 			selectedModels = _selectedModels;
+		}
+		if (multiModelDiscussionEnabled && atSelectedModel === undefined) {
+			const discussionSelectionIds = getUniqueModelIds(_selectedModels);
+			if (_selectedModels.includes('') || discussionSelectionIds.length < 2) {
+				toast.error($i18n.t('Select at least 2 models to start a discussion'));
+				return;
+			}
 		}
 		if (selectedModels.includes('')) {
 			toast.error($i18n.t('Model not selected'));
@@ -4591,6 +4867,124 @@
 			}
 		}
 
+		const shouldUseMultiModelDiscussion =
+			!modelId && atSelectedModel === undefined && multiModelDiscussionEnabled;
+		if (shouldUseMultiModelDiscussion) {
+			const discussionParticipantIds = getDiscussionParticipantIds(selectedModelIds);
+			if (discussionParticipantIds.length < 2) {
+				toast.error($i18n.t('Select at least 2 models to start a discussion'));
+				return;
+			}
+
+			if (selectedModelIds.length > discussionParticipantIds.length) {
+				toast.info(
+					$i18n.t('Discussion uses the first {{count}} selected models', {
+						count: MULTI_MODEL_DISCUSSION_MAX_MODELS
+					})
+				);
+			}
+
+			const finalModelId = discussionParticipantIds[0];
+			const finalModel = getModelById(finalModelId);
+			if (!finalModel) {
+				toast.error($i18n.t(`Model {{modelId}} not found`, { modelId: finalModelId }));
+				return;
+			}
+
+			const responseMessageId = uuidv4();
+			const responseMessage = {
+				parentId: parentId,
+				id: responseMessageId,
+				childrenIds: [],
+				role: 'assistant',
+				content: '',
+				model: getModelRequestId(finalModel),
+				modelName: getModelChatDisplayName(finalModel) || finalModel.id,
+				...(getModelRef(finalModel) ? { model_ref: getModelRef(finalModel) } : {}),
+				modelIdx: 0,
+				userContext: null,
+				timestamp: Math.floor(Date.now() / 1000),
+				discussion: buildInitialDiscussionState(discussionParticipantIds),
+				...(_pendingInstruction ? { instruction: _pendingInstruction } : {})
+			};
+
+			history.messages[responseMessageId] = responseMessage;
+			history.currentId = responseMessageId;
+
+			if (parentId !== null && history.messages[parentId]) {
+				history.messages[parentId].childrenIds = [
+					...history.messages[parentId].childrenIds,
+					responseMessageId
+				];
+			}
+			history = history;
+
+			if (newChat && _history.messages[_history.currentId].parentId === null) {
+				_chatId = await initChatHandler(_history);
+			}
+
+			await tick();
+
+			_history = structuredClone(history);
+			await saveChatHandler(_chatId, _history);
+
+			const messages = createMessagesList(_history, parentId);
+			const hasImages = messages.some((message) =>
+				message.files?.some((file) => file.type === 'image')
+			);
+			if (hasImages) {
+				for (const participantId of discussionParticipantIds) {
+					const participantModel = getModelById(participantId);
+					if (participantModel && !(participantModel.info?.meta?.capabilities?.vision ?? true)) {
+						toast.warning(
+							$i18n.t('Model {{modelName}} is not vision capable', {
+								modelName: getModelChatDisplayName(participantModel) || participantModel.id
+							})
+						);
+					}
+				}
+			}
+
+			let userContext = null;
+			if ($settings?.memory ?? false) {
+				const res = await queryMemory(localStorage.token, prompt).catch((error) => {
+					toast.error(`${error}`);
+					return null;
+				});
+				if (res) {
+					const memoryDocuments = res?.documents?.[0] ?? [];
+					const memoryMetadatas = res?.metadatas?.[0] ?? [];
+
+					if (memoryDocuments.length > 0) {
+						userContext = memoryDocuments.reduce((acc, doc, index) => {
+							const createdAtTimestamp = memoryMetadatas[index]?.created_at;
+							const createdAtDate = createdAtTimestamp
+								? new Date(createdAtTimestamp * 1000).toISOString().split('T')[0]
+								: null;
+							return `${acc}${index + 1}.${createdAtDate ? ` [${createdAtDate}].` : ''} ${doc}\n`;
+						}, '');
+					}
+				}
+			}
+
+			_history.messages[responseMessageId].userContext = userContext;
+			history.messages[responseMessageId].userContext = userContext;
+
+			const chatEventEmitter = await getChatEventEmitter(getModelRequestId(finalModel), _chatId);
+
+			resetAutoScrollLock();
+			scrollToBottom();
+			await sendPromptSocket(_history, finalModel, responseMessageId, _chatId, {
+				discussion: buildDiscussionRequestPayload(discussionParticipantIds)
+			});
+
+			if (chatEventEmitter) clearInterval(chatEventEmitter);
+
+			currentChatPage.set(1);
+			chats.set(await getChatList(localStorage.token, $currentChatPage));
+			return;
+		}
+
 		// Create response messages for each selected model
 		for (const [_modelIdx, modelId] of selectedModelIds.entries()) {
 			const model = getModelById(modelId);
@@ -4709,7 +5103,13 @@
 		chats.set(await getChatList(localStorage.token, $currentChatPage));
 	};
 
-	const sendPromptSocket = async (_history, model, responseMessageId, _chatId) => {
+	const sendPromptSocket = async (
+		_history,
+		model,
+		responseMessageId,
+		_chatId,
+		options: { discussion?: any } = {}
+	) => {
 		const responseMessage = _history.messages[responseMessageId];
 		const files = structuredClone(chatFiles);
 
@@ -4861,6 +5261,7 @@
 				stream: stream,
 				model: getModelRequestId(model),
 				messages: messages,
+				...(options.discussion ? { discussion: options.discussion } : {}),
 				params: {
 					...$settings?.params,
 					...params,
@@ -5689,6 +6090,8 @@
 					{history}
 					title={$chatTitle}
 					bind:selectedModels
+					bind:multiModelDiscussionEnabled
+					maxDiscussionModels={MULTI_MODEL_DISCUSSION_MAX_MODELS}
 					shareEnabled={!!history.currentId}
 					{initNewChat}
 				/>

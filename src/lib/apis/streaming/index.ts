@@ -15,6 +15,8 @@ type TextStreamUpdate = {
 	error?: any;
 	usage?: ResponseUsage;
 	image?: StreamedImageUpdate;
+	// eslint-disable-next-line @typescript-eslint/no-explicit-any
+	discussion?: any;
 };
 
 type ResponseUsage = {
@@ -213,6 +215,15 @@ async function* openAIStreamToIterator(
 				continue;
 			}
 
+			if (parsedData.type === 'discussion' || parsedData.type === 'discussion_delta' || parsedData.discussion) {
+				yield {
+					done: false,
+					value: '',
+					discussion: parsedData.discussion ?? parsedData.data ?? parsedData
+				};
+				continue;
+			}
+
 			const delta = parsedData.choices?.[0]?.delta ?? {};
 			let image = consumeImageDelta(pendingImages, delta?.image);
 			const imageUrlUpdates = collectImageUrlDeltas(delta, imageUrlSequence);
@@ -280,6 +291,10 @@ async function* streamLargeDeltasAsRandomChunks(
 			continue;
 		}
 		if (textStreamUpdate.image) {
+			yield textStreamUpdate;
+			continue;
+		}
+		if (textStreamUpdate.discussion) {
 			yield textStreamUpdate;
 			continue;
 		}

@@ -11,8 +11,39 @@
 
 	export let selectedModels = [''];
 	export let disabled = false;
+	export let multiModelDiscussionEnabled = false;
+	export let maxDiscussionModels = 5;
 
 	export let showSetDefault = true;
+
+	$: canUseMultipleModels = $user?.role === 'admin' || ($user?.permissions?.chat?.multiple_models ?? true);
+	$: selectedModelCount = selectedModels.filter((model) => `${model ?? ''}`.trim()).length;
+	$: discussionDisabled = disabled || !canUseMultipleModels;
+	$: discussionHint = !canUseMultipleModels
+		? $i18n.t('Multiple models are not enabled for your account')
+		: selectedModelCount < 2
+			? $i18n.t('Select at least 2 models to start a discussion')
+			: selectedModelCount > maxDiscussionModels
+				? $i18n.t('Discussion uses the first {{count}} selected models', {
+						count: maxDiscussionModels
+				})
+			: $i18n.t('Selected models will discuss before producing one final answer');
+
+	const toggleMultiModelDiscussion = () => {
+		if (discussionDisabled) {
+			return;
+		}
+
+		const nextEnabled = !multiModelDiscussionEnabled;
+		if (nextEnabled && selectedModelCount < 2 && selectedModels.length < 2) {
+			selectedModels = [...selectedModels, ''];
+		}
+		multiModelDiscussionEnabled = nextEnabled;
+	};
+
+	$: if (!canUseMultipleModels && multiModelDiscussionEnabled) {
+		multiModelDiscussionEnabled = false;
+	}
 
 	// Stable items array: only recomputed when $models reference changes
 	$: selectorItems = $models.map((model) => ({
@@ -38,11 +69,11 @@
 	{#if $modelsStatus === 'loading' && $models.length === 0}
 		<div class="flex items-center gap-2 text-xs text-gray-500 ml-1 pb-1">
 			<Spinner className="size-3.5" />
-			<span>Loading models...</span>
+			<span>{$i18n.t('Loading models...')}</span>
 		</div>
 	{:else if $modelsStatus === 'error' && $models.length === 0}
 		<div class="text-xs text-gray-500 ml-1 pb-1">
-			<span>Failed to load models</span>
+			<span>{$i18n.t('Failed to load models')}</span>
 			{#if $modelsError}
 				<span class="text-gray-400">: {$modelsError}</span>
 			{/if}
@@ -66,7 +97,7 @@
 					</div>
 				</div>
 
-				{#if $user?.role === 'admin' || ($user?.permissions?.chat?.multiple_models ?? true)}
+				{#if canUseMultipleModels}
 					<div class="shrink-0">
 						<Tooltip content={$i18n.t('Add Model')}>
 							<button
@@ -159,7 +190,7 @@
 			{/each}
 
 			<!-- 添加模型按钮 - 与 chips 同行 -->
-			{#if $user?.role === 'admin' || ($user?.permissions?.chat?.multiple_models ?? true)}
+			{#if canUseMultipleModels}
 				<Tooltip content={$i18n.t('Add Model')}>
 					<button
 						class="inline-flex items-center justify-center
@@ -194,4 +225,37 @@
 			{/if}
 		</div>
 	{/if}
+
+	<div class="mt-1.5 flex max-w-full flex-wrap items-center gap-2 px-0.5 text-xs">
+		<button
+			type="button"
+			class="inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 transition-all duration-150
+				{multiModelDiscussionEnabled
+					? 'border-primary-500/50 bg-primary-50 text-primary-700 dark:border-primary-400/40 dark:bg-primary-900/20 dark:text-primary-200'
+					: 'border-gray-200/70 bg-white/70 text-gray-500 hover:bg-gray-50 dark:border-gray-700/60 dark:bg-gray-900/50 dark:text-gray-400 dark:hover:bg-gray-800/70'}
+				disabled:cursor-not-allowed disabled:opacity-50"
+			disabled={discussionDisabled}
+			aria-pressed={multiModelDiscussionEnabled}
+			on:click={toggleMultiModelDiscussion}
+		>
+			<span
+				class="relative inline-flex h-3.5 w-6 shrink-0 rounded-full transition-colors
+					{multiModelDiscussionEnabled ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+			>
+				<span
+					class="absolute top-0.5 size-2.5 rounded-full bg-white shadow transition-transform
+						{multiModelDiscussionEnabled ? 'translate-x-3' : 'translate-x-0.5'}"
+				/>
+			</span>
+			<span class="font-medium">{$i18n.t('Multi-model discussion')}</span>
+		</button>
+
+		<span
+			class="min-w-0 flex-1 text-gray-500 dark:text-gray-400 {multiModelDiscussionEnabled && selectedModelCount < 2
+				? 'text-amber-600 dark:text-amber-400'
+				: ''}"
+		>
+			{discussionHint}
+		</span>
+	</div>
 </div>

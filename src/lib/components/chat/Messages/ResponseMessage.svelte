@@ -81,6 +81,7 @@
 	import ContentRenderer from './ContentRenderer.svelte';
 	import MessageOutline from './MessageOutline.svelte';
 	import ThinkingIndicator from './ThinkingIndicator.svelte';
+	import DiscussionPanel from './DiscussionPanel.svelte';
 	import { KokoroWorker } from '$lib/workers/KokoroWorker';
 	import FileItem from '$lib/components/common/FileItem.svelte';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
@@ -147,6 +148,7 @@
 		stopped?: boolean;
 		stoppedByUser?: boolean;
 		completedAt?: number;
+		discussion?: any;
 		usage?: Record<string, unknown>;
 		error?:
 			| boolean
@@ -344,6 +346,7 @@
 		(file) => !showImageGenerationResultGrid || !isImageGenerationResultFile(file)
 	);
 	$: hasVisibleMessageFiles = messageHasVisibleFiles(message?.files);
+	$: hasVisibleDiscussion = message?.discussion?.enabled === true;
 	$: renderableMessageError = getRenderableMessageError(message?.error, message?.files);
 	$: hasAnyThinkingOutput =
 		hasDetailsOfType(messageContent, 'reasoning') || hasRawThinkingOutput(messageContent);
@@ -393,6 +396,7 @@
 		!message.error &&
 		!showImageGenerationPlaceholder &&
 		!hasVisibleAssistantOutput &&
+		!hasVisibleDiscussion &&
 		!hasAnyThinkingOutput &&
 		!hasAnyToolCallOutput;
 	$: showContinuationIndicator =
@@ -404,6 +408,7 @@
 		!hasActiveToolCallOutput &&
 		!hasActiveVisibleStatus &&
 		(hasVisibleAssistantOutput ||
+			hasVisibleDiscussion ||
 			hasAnyThinkingOutput ||
 			hasAnyToolCallOutput ||
 			hasVisibleMessageFiles ||
@@ -1423,6 +1428,10 @@
 										class="w-full flex flex-col relative {!message.done ? 'streaming-fade' : ''}"
 										id="response-content-container"
 									>
+										{#if hasVisibleDiscussion}
+											<DiscussionPanel discussion={message.discussion} />
+										{/if}
+
 										{#if showImageGenerationPlaceholder}
 											<div
 												class="my-2 grid w-full select-none gap-2"

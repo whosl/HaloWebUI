@@ -143,6 +143,7 @@
 	let regenerateMenu = true;
 	let renderMarkdownInPreviews = true;
 	let displayMultiModelResponsesInTabs = false;
+	let multiModelDiscussionRounds = 2;
 	let stylizedPdfExport = true;
 	let showFloatingActionButtons = true;
 	let floatingActionButtons: Array<{
@@ -151,6 +152,26 @@
 		input: boolean;
 		prompt: string;
 	}> | null = null;
+	const MULTI_MODEL_DISCUSSION_MIN_ROUNDS = 1;
+	const MULTI_MODEL_DISCUSSION_MAX_ROUNDS = 5;
+	const MULTI_MODEL_DISCUSSION_DEFAULT_ROUNDS = 2;
+
+	const normalizeMultiModelDiscussionRounds = (value: unknown) => {
+		const parsed = Number(value ?? MULTI_MODEL_DISCUSSION_DEFAULT_ROUNDS);
+		if (!Number.isFinite(parsed)) {
+			return MULTI_MODEL_DISCUSSION_DEFAULT_ROUNDS;
+		}
+
+		return Math.max(
+			MULTI_MODEL_DISCUSSION_MIN_ROUNDS,
+			Math.min(Math.trunc(parsed), MULTI_MODEL_DISCUSSION_MAX_ROUNDS)
+		);
+	};
+
+	const handleMultiModelDiscussionRoundsChange = (event: Event) => {
+		const target = event.currentTarget as HTMLSelectElement | null;
+		multiModelDiscussionRounds = normalizeMultiModelDiscussionRounds(target?.value);
+	};
 
 	$: autoGenerationRequestWarning = tr(
 		'开启后，每次对话除了生成回答，还可能额外发起一次模型请求。若这三项都开启，单次提问可能在短时间内连续触发 3-4 次请求，容易命中模型服务或上游中转站的 RPM / 频率限制，严重时可能被临时封禁。',
@@ -257,6 +278,7 @@
 			regenerateMenu: boolean;
 			renderMarkdownInPreviews: boolean;
 			displayMultiModelResponsesInTabs: boolean;
+			multiModelDiscussionRounds: number;
 			stylizedPdfExport: boolean;
 			showFloatingActionButtons: boolean;
 			floatingActionButtons: Array<{
@@ -560,6 +582,7 @@
 			regenerateMenu,
 			renderMarkdownInPreviews,
 			displayMultiModelResponsesInTabs,
+			multiModelDiscussionRounds: normalizeMultiModelDiscussionRounds(multiModelDiscussionRounds),
 			stylizedPdfExport,
 			showFloatingActionButtons,
 			floatingActionButtons,
@@ -640,6 +663,9 @@
 		regenerateMenu = snapshot.regenerateMenu;
 		renderMarkdownInPreviews = snapshot.renderMarkdownInPreviews;
 		displayMultiModelResponsesInTabs = snapshot.displayMultiModelResponsesInTabs;
+		multiModelDiscussionRounds = normalizeMultiModelDiscussionRounds(
+			snapshot.multiModelDiscussionRounds
+		);
 		stylizedPdfExport = snapshot.stylizedPdfExport;
 		showFloatingActionButtons = snapshot.showFloatingActionButtons;
 		floatingActionButtons = cloneSettingsSnapshot(snapshot.floatingActionButtons);
@@ -711,6 +737,7 @@
 		regenerateMenu;
 		renderMarkdownInPreviews;
 		displayMultiModelResponsesInTabs;
+		multiModelDiscussionRounds;
 		stylizedPdfExport;
 		showFloatingActionButtons;
 		floatingActionButtons;
@@ -1010,6 +1037,7 @@
 				regenerateMenu,
 				renderMarkdownInPreviews,
 				displayMultiModelResponsesInTabs,
+				multiModelDiscussionRounds: normalizeMultiModelDiscussionRounds(multiModelDiscussionRounds),
 				stylizedPdfExport,
 				showFloatingActionButtons,
 				floatingActionButtons,
@@ -1165,6 +1193,9 @@
 		regenerateMenu = $settings?.regenerateMenu ?? true;
 		renderMarkdownInPreviews = $settings?.renderMarkdownInPreviews ?? true;
 		displayMultiModelResponsesInTabs = $settings?.displayMultiModelResponsesInTabs ?? false;
+		multiModelDiscussionRounds = normalizeMultiModelDiscussionRounds(
+			$settings?.multiModelDiscussionRounds
+		);
 		stylizedPdfExport = $settings?.stylizedPdfExport ?? true;
 		showFloatingActionButtons = $settings?.showFloatingActionButtons ?? true;
 		floatingActionButtons = $settings?.floatingActionButtons ?? null;
@@ -2231,6 +2262,27 @@
 											<Switch
 												bind:state={displayMultiModelResponsesInTabs}
 											/>
+										</div>
+										<div class="glass-item px-4 py-3">
+											<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+												<div class="min-w-0">
+													<div class="text-sm font-medium">
+														{$i18n.t('Multi-model discussion rounds')}
+													</div>
+													<div class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+														{$i18n.t('Choose how many discussion rounds each multi-model question uses')}
+													</div>
+												</div>
+												<select
+													class="w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm outline-hidden transition focus:border-gray-300 dark:border-gray-700 dark:bg-gray-900 sm:w-40"
+													value={multiModelDiscussionRounds}
+													on:change={handleMultiModelDiscussionRoundsChange}
+												>
+													{#each [1, 2, 3, 4, 5] as roundCount}
+														<option value={roundCount}>{$i18n.t('{{count}} round(s)', { count: roundCount })}</option>
+													{/each}
+												</select>
+											</div>
 										</div>
 										<div class="flex items-center justify-between glass-item px-4 py-3">
 											<div class="text-sm font-medium">

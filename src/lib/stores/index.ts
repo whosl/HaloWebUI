@@ -261,6 +261,7 @@ type Settings = {
 	expandDetails?: boolean;
 	renderMarkdownInPreviews?: boolean;
 	displayMultiModelResponsesInTabs?: boolean;
+	multiModelDiscussionRounds?: number;
 	scrollOnBranchChange?: boolean;
 	stylizedPdfExport?: boolean;
 	showFloatingActionButtons?: boolean;

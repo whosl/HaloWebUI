@@ -40,6 +40,8 @@
 	export let chat;
 	export let history;
 	export let selectedModels;
+	export let multiModelDiscussionEnabled = false;
+	export let maxDiscussionModels = 5;
 	export let showModelSelector = true;
 
 	let showShareChatModal = false;
@@ -79,7 +81,12 @@
 			"
 				>
 					{#if showModelSelector}
-						<ModelSelector bind:selectedModels showSetDefault={!shareEnabled} />
+						<ModelSelector
+							bind:selectedModels
+							bind:multiModelDiscussionEnabled
+							{maxDiscussionModels}
+							showSetDefault={!shareEnabled}
+						/>
 					{/if}
 				</div>
 

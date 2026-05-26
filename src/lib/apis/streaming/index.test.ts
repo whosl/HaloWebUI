@@ -42,6 +42,46 @@ describe('createOpenAITextStream', () => {
 		expect(updates.at(-1)).toMatchObject({ done: true, value: '' });
 	});
 
+	it('emits discussion events separately from final answer text', async () => {
+		const discussion = {
+			type: 'turn_done',
+			state: {
+				status: 'running',
+				rounds: [{ index: 1, turns: [{ model: 'model-a', content: 'View A' }] }]
+			}
+		};
+		const stream = buildReadableStream([
+			`data: ${JSON.stringify({ type: 'discussion', data: discussion })}\n\n`,
+			'data: {"choices":[{"delta":{"content":"Final answer"}}]}\n\n',
+			'data: [DONE]\n\n'
+		]);
+
+		const iterator = await createOpenAITextStream(stream, false);
+		const updates = await collectUpdates(iterator);
+
+		expect(updates[0]).toMatchObject({ done: false, value: '', discussion });
+		expect(updates[1]).toMatchObject({ done: false, value: 'Final answer' });
+		expect(updates.at(-1)).toMatchObject({ done: true, value: '' });
+	});
+
+	it('does not split discussion events when splitLargeDeltas is enabled', async () => {
+		const discussion = {
+			type: 'final_start',
+			state: { status: 'summarizing' }
+		};
+		const stream = buildReadableStream([
+			`data: ${JSON.stringify({ type: 'discussion_delta', discussion })}\n\n`,
+			'data: [DONE]\n\n'
+		]);
+
+		const iterator = await createOpenAITextStream(stream, true);
+		const updates = await collectUpdates(iterator);
+
+		expect(updates[0]).toMatchObject({ done: false, value: '', discussion });
+		expect(updates).toHaveLength(2);
+		expect(updates.at(-1)).toMatchObject({ done: true, value: '' });
+	});
+
 	it('reassembles streamed image fragments into markdown once final chunk arrives', async () => {
 		const stream = buildReadableStream([
 			'data: {"choices":[{"delta":{"image":{"id":"img_1","mime_type":"image/png","data":"abcd","final":false}}}]}\n\n',
