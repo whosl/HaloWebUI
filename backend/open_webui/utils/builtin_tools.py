@@ -566,7 +566,7 @@ def get_builtin_tools(
             "callable": search_knowledge_files,
             "spec": _tool_spec(
                 "search_knowledge_files",
-                "Search knowledge files and return matching file IDs.",
+                "Search saved workspace knowledge-base files and return matching file IDs.",
                 {
                     "type": "object",
                     "properties": {

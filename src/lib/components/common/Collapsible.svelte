@@ -41,9 +41,12 @@
 	import ChevronUp from '../icons/ChevronUp.svelte';
 	import ChevronDown from '../icons/ChevronDown.svelte';
 	import Spinner from './Spinner.svelte';
-	import CodeBlock from '../chat/Messages/CodeBlock.svelte';
 	import Markdown from '../chat/Messages/Markdown.svelte';
 	import Image from './Image.svelte';
+	import ActivityCard from './ActivityCard.svelte';
+	import LightBulb from '../icons/LightBulb.svelte';
+	import WrenchSolid from '../icons/WrenchSolid.svelte';
+	import CommandLine from '../icons/CommandLine.svelte';
 
 	export let open = false;
 
@@ -93,6 +96,75 @@
 	function isImageGenerationTool(name: string): boolean {
 		return ['generate_image', 'edit_image'].includes(name?.toLowerCase() ?? '');
 	}
+
+	const ACTIVITY_DETAIL_TYPES = new Set(['reasoning', 'tool_calls', 'code_interpreter']);
+
+	$: isActivityBlock =
+		title !== null && ACTIVITY_DETAIL_TYPES.has(String(attributes?.type ?? ''));
+
+	function isActivityDone(): boolean {
+		return attributes?.done === 'true';
+	}
+
+	function isActivityBusy(): boolean {
+		return isActivityBlock && attributes?.done !== 'true';
+	}
+
+	function formatReasoningTitle(): string {
+		if (isActivityDone() && attributes?.duration) {
+			const durationSeconds = Number(attributes.duration);
+
+			if (!Number.isFinite(durationSeconds)) {
+				return $i18n.t('Deep thought for {{DURATION}}', {
+					DURATION: attributes.duration
+				});
+			}
+
+			if (durationSeconds < 60) {
+				return $i18n.t('Deep thought for {{DURATION}} seconds', {
+					DURATION: attributes.duration
+				});
+			}
+
+			return $i18n.t('Deep thought for {{DURATION}}', {
+				DURATION: dayjs.duration(durationSeconds, 'seconds').humanize()
+			});
+		}
+
+		return $i18n.t('Thinking deeply...');
+	}
+
+	function getActivityTitle(): string {
+		if (attributes?.type === 'reasoning') {
+			return formatReasoningTitle();
+		}
+
+		if (attributes?.type === 'code_interpreter') {
+			return isActivityDone() ? $i18n.t('Analysis completed') : $i18n.t('Analyzing...');
+		}
+
+		if (attributes?.type === 'tool_calls') {
+			return attributes?.name || $i18n.t('Tool call');
+		}
+
+		return title ?? '';
+	}
+
+	function getActivityStatus(): string {
+		if (isActivityDone()) {
+			return $i18n.t('Completed');
+		}
+
+		if (attributes?.type === 'tool_calls') {
+			return $i18n.t('Executing');
+		}
+
+		return '';
+	}
+
+	function getActivityStatusTone(): 'neutral' | 'success' | 'running' | 'warning' {
+		return isActivityDone() ? 'success' : 'running';
+	}
 </script>
 
 <div
@@ -103,7 +175,73 @@
 	data-pdf-open={open ? 'true' : 'false'}
 	data-pdf-type={attributes?.type ?? ''}
 >
-	{#if title !== null}
+	{#if isActivityBlock}
+		<ActivityCard
+			bind:open
+			title={getActivityTitle()}
+			status={getActivityStatus()}
+			statusTone={getActivityStatusTone()}
+			busy={isActivityBusy()}
+			{disabled}
+			expandable={!hide}
+			className="activity-collapsible"
+			bodyClassName="activity-collapsible-body"
+		>
+			<svelte:fragment slot="icon">
+				{#if attributes?.type === 'reasoning'}
+					<LightBulb className="size-4" strokeWidth="1.8" />
+				{:else if attributes?.type === 'code_interpreter'}
+					<CommandLine className="size-4" strokeWidth="1.8" />
+				{:else}
+					<WrenchSolid className="size-4" />
+				{/if}
+			</svelte:fragment>
+
+			<div
+				slot="content"
+				on:pointerup={(e) => {
+					e.stopPropagation();
+				}}
+			>
+				{#if attributes?.type === 'tool_calls'}
+					{@const args = decode(attributes?.arguments)}
+					{@const result = decode(attributes?.result ?? '')}
+					{@const files = parseJSONString(decode(attributes?.files ?? ''))}
+
+					{#if attributes?.done === 'true'}
+						<Markdown
+							id={`${collapsibleId}-tool-calls-${attributes?.id}-result`}
+							content={`> \`\`\`json
+> ${formatJSONString(args)}
+> ${formatJSONString(result)}
+> \`\`\``}
+						/>
+					{:else}
+						<Markdown
+							id={`${collapsibleId}-tool-calls-${attributes?.id}-result`}
+							content={`> \`\`\`json
+> ${formatJSONString(args)}
+> \`\`\``}
+						/>
+					{/if}
+
+					{#if attributes?.done === 'true' && !isImageGenerationTool(attributes?.name)}
+						{#if typeof files === 'object'}
+							{#each files ?? [] as file}
+								{#if typeof file === 'string' && file.startsWith('data:image/')}
+									<Image src={file} alt="Image" />
+								{:else if file?.type === 'image' && file?.url}
+									<Image src={file.url} alt="Image" />
+								{/if}
+							{/each}
+						{/if}
+					{/if}
+				{:else}
+					<slot name="content" />
+				{/if}
+			</div>
+		</ActivityCard>
+	{:else if title !== null}
 		<!-- svelte-ignore a11y-no-static-element-interactions -->
 		<!-- svelte-ignore a11y-click-events-have-key-events -->
 		<div
@@ -230,7 +368,7 @@
 		</div>
 	{/if}
 
-	{#if attributes?.type === 'tool_calls'}
+	{#if !isActivityBlock && attributes?.type === 'tool_calls'}
 		{@const args = decode(attributes?.arguments)}
 		{@const result = decode(attributes?.result ?? '')}
 		{@const files = parseJSONString(decode(attributes?.files ?? ''))}
@@ -273,7 +411,7 @@
 				{/if}
 			{/if}
 		{/if}
-	{:else if !grow}
+	{:else if !isActivityBlock && !grow}
 		{#if open && !hide}
 			<div
 				transition:slide={{ duration: 300, easing: quintOut, axis: 'y' }}

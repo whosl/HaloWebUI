@@ -127,45 +127,67 @@
 	$: selectedDone = selectedAttrs?.done === 'true';
 </script>
 
-<div class="-mx-0.5">
-	<!-- Pill button header -->
+<div
+	class="-mx-0.5 rounded-xl border border-gray-200/70 bg-white/65 p-1.5 shadow-[0_1px_2px_rgba(15,23,42,0.04)] backdrop-blur-xl dark:border-gray-700/60 dark:bg-gray-850/45"
+>
+	<!-- Group header keeps the existing multi-tool summary while matching activity cards. -->
 	<button
-		class="text-[13px] font-medium px-3 py-1.5 h-9 rounded-xl
-			bg-white/60 dark:bg-gray-800/60 backdrop-blur-xl
-			hover:bg-white/80 dark:hover:bg-gray-700/60 transition-all duration-200
-			flex items-center gap-1.5
-			border border-gray-200/50 dark:border-gray-700/50
+		type="button"
+		class="flex min-h-10 w-full items-center gap-2.5 rounded-lg px-2.5 py-1.5 text-left text-[13px] font-medium
+			transition-colors hover:bg-gray-50/80 dark:hover:bg-gray-800/45
 			{someExecuting ? 'text-gray-500 dark:text-gray-400' : 'text-gray-600 dark:text-gray-300'}"
 		on:click={toggleGroup}
 	>
-		{#if someExecuting}
-			<Spinner className="size-4" />
-		{:else}
-			<WrenchSolid className="size-4" />
-		{/if}
-
-		<span class="translate-y-px {someExecuting ? 'shimmer' : ''}">
+		<div
+			class="flex size-6 shrink-0 items-center justify-center rounded-lg bg-gray-50 text-gray-500 ring-1 ring-gray-200/70 dark:bg-gray-800/70 dark:text-gray-400 dark:ring-gray-700/60"
+		>
 			{#if someExecuting}
-				{$i18n.t('Calling {{COUNT}} tools...', { COUNT: totalCount })}
+				<Spinner className="size-4" />
 			{:else}
-				{$i18n.t('Called {{COUNT}} tools', { COUNT: totalCount })}
+				<WrenchSolid className="size-4" />
 			{/if}
-		</span>
+		</div>
 
-		{#if someExecuting && doneCount > 0}
-			<span class="text-gray-400 dark:text-gray-500 tabular-nums">
-				{doneCount}/{totalCount}
+		<div class="min-w-0 flex-1">
+			<div class="line-clamp-1 text-[13px] font-medium leading-5 {someExecuting ? 'shimmer' : ''}">
+				{#if someExecuting}
+					{$i18n.t('Calling {{COUNT}} tools...', { COUNT: totalCount })}
+				{:else}
+					{$i18n.t('Called {{COUNT}} tools', { COUNT: totalCount })}
+				{/if}
+			</div>
+			{#if someExecuting && doneCount > 0}
+				<div class="text-[11px] leading-4 text-gray-400 dark:text-gray-500 tabular-nums">
+					{doneCount}/{totalCount}
+				</div>
+			{/if}
+		</div>
+
+		<div class="flex shrink-0 items-center gap-2">
+			<span
+				class="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 {someExecuting
+					? 'bg-primary-50 text-primary-600 ring-primary-200/70 dark:bg-primary-900/20 dark:text-primary-300 dark:ring-primary-800/50'
+					: 'bg-green-50 text-green-600 ring-green-200/70 dark:bg-green-900/20 dark:text-green-400 dark:ring-green-800/60'}"
+			>
+				{#if someExecuting}
+					<Spinner className="size-3" />
+				{:else}
+					<span class="size-1.5 rounded-full bg-green-500" />
+				{/if}
+				<span class="whitespace-nowrap">
+					{someExecuting ? $i18n.t('Executing') : $i18n.t('Completed')}
+				</span>
 			</span>
-		{/if}
 
-		<div class="shrink-0 transition-transform duration-200" class:rotate-180={expanded}>
-			<ChevronDown strokeWidth="3.5" className="size-3" />
+			<span class="flex size-5 items-center justify-center text-gray-400 transition-transform duration-200" class:rotate-180={expanded}>
+				<ChevronDown strokeWidth="3.5" className="size-3.5" />
+			</span>
 		</div>
 	</button>
 
 	<!-- Progress bar (only during execution) -->
 	{#if someExecuting}
-		<div class="mt-1.5 mx-0.5 h-0.5 rounded-full bg-gray-100 dark:bg-gray-800 overflow-hidden">
+		<div class="mx-2 mt-1 h-0.5 overflow-hidden rounded-full bg-gray-100 dark:bg-gray-800">
 			<div
 				class="h-full bg-gradient-to-r from-primary-400 to-primary-600 transition-all duration-500 ease-out rounded-full"
 				style="width: {(doneCount / totalCount) * 100}%"
@@ -175,7 +197,7 @@
 
 	<!-- Expanded: chip grid + detail panel -->
 	{#if expanded}
-		<div class="mt-1.5" transition:slide={{ duration: 200, easing: quintOut }}>
+		<div class="mt-2 px-1 pb-1" transition:slide={{ duration: 200, easing: quintOut }}>
 			<!-- Chip flow layout -->
 			<div class="flex flex-wrap gap-1.5">
 				{#each tokens as toolToken, toolIdx (toolToken.attributes?.id ?? toolIdx)}

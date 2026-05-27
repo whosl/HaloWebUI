@@ -238,7 +238,9 @@
 <!-- {JSON.stringify(tokens)} -->
 {#each renderItems as item, idx (idx)}
 	{#if item.kind === 'tool_call_group'}
-		<ToolCallGroup id={`${id}-tcg-${item.startIdx}`} tokens={item.tokens} />
+		<div class="my-2 w-full">
+			<ToolCallGroup id={`${id}-tcg-${item.startIdx}`} tokens={item.tokens} />
+		</div>
 	{:else}
 		{@const token = item.token}
 		{@const tokenIdx = item.originalIdx}
@@ -450,30 +452,60 @@
 				</ul>
 			{/if}
 		{:else if token.type === 'details'}
-			<Collapsible
-				title={token.summary}
-				open={getDetailsOpen(token, tokenIdx)}
-				attributes={token?.attributes}
-				className="w-full space-y-1"
-				dir="auto"
-				on:change={(e) => {
-					setDetailsOpen(token, tokenIdx, e.detail);
-				}}
-			>
-				<div class=" mb-1.5" slot="content">
-					<svelte:self
-						id={`${id}-${tokenIdx}-d`}
-						{messageId}
-						tokens={marked.lexer(token.text)}
-						pathPrefix={[...pathPrefix, tokenIdx]}
+			{@const isStructuredDetail = isStructuredDetailsToken(token)}
+			{#if isStructuredDetail}
+				<div class="my-2 w-full">
+					<Collapsible
+						title={token.summary}
+						open={getDetailsOpen(token, tokenIdx)}
 						attributes={token?.attributes}
-						{charAnimation}
-						{onTaskClick}
-						{onSourceClick}
-						{generatedFiles}
-					/>
+						className="w-full"
+						dir="auto"
+						on:change={(e) => {
+							setDetailsOpen(token, tokenIdx, e.detail);
+						}}
+					>
+						<div slot="content">
+							<svelte:self
+								id={`${id}-${tokenIdx}-d`}
+								{messageId}
+								tokens={marked.lexer(token.text)}
+								pathPrefix={[...pathPrefix, tokenIdx]}
+								attributes={token?.attributes}
+								{charAnimation}
+								{onTaskClick}
+								{onSourceClick}
+								{generatedFiles}
+							/>
+						</div>
+					</Collapsible>
 				</div>
-			</Collapsible>
+			{:else}
+				<Collapsible
+					title={token.summary}
+					open={getDetailsOpen(token, tokenIdx)}
+					attributes={token?.attributes}
+					className="w-full space-y-1"
+					dir="auto"
+					on:change={(e) => {
+						setDetailsOpen(token, tokenIdx, e.detail);
+					}}
+				>
+					<div class="mb-1.5" slot="content">
+						<svelte:self
+							id={`${id}-${tokenIdx}-d`}
+							{messageId}
+							tokens={marked.lexer(token.text)}
+							pathPrefix={[...pathPrefix, tokenIdx]}
+							attributes={token?.attributes}
+							{charAnimation}
+							{onTaskClick}
+							{onSourceClick}
+							{generatedFiles}
+						/>
+					</div>
+				</Collapsible>
+			{/if}
 		{:else if token.type === 'html'}
 			{@const isSvgMarkupToken = isSvgMarkup(token.text)}
 			{@const html = rewriteDataUrlDownloadLinks(

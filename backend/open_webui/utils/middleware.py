@@ -328,6 +328,348 @@ def _safe_json_loads(value: Any) -> Any:
         return value
 
 
+_CURRENT_CHAT_RESOURCES_MAX_ITEMS = 8
+_CURRENT_CHAT_RESOURCE_NAME_MAX_CHARS = 160
+_CURRENT_CHAT_RESOURCE_PREVIEW_MAX_CHARS = 1200
+_CURRENT_CHAT_RESOURCE_PREVIEW_TOTAL_MAX_CHARS = 2400
+
+_TEXT_RESOURCE_MEDIA_TYPES = {
+    "application/csv",
+    "application/json",
+    "application/jsonl",
+    "application/ld+json",
+    "application/markdown",
+    "application/pdf",
+    "application/rtf",
+    "application/vnd.ms-excel",
+    "application/vnd.ms-powerpoint",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "application/x-ndjson",
+    "application/xml",
+    "text/csv",
+    "text/markdown",
+    "text/plain",
+    "text/tab-separated-values",
+    "text/xml",
+}
+_ARCHIVE_RESOURCE_EXTENSIONS = {
+    ".7z",
+    ".bz2",
+    ".gz",
+    ".rar",
+    ".tar",
+    ".tgz",
+    ".xz",
+    ".zip",
+}
+_RESOURCE_PREVIEW_INTENT_RE = re.compile(
+    r"(文件|附件|文档|资料|内容|里面|这是什么|是什么内容|概括|总结|预览|看看|说明|"
+    r"file|attachment|document|resource|content|summary|summarize|overview|describe)",
+    re.IGNORECASE,
+)
+
+
+def _get_file_item_nested_file(file_item: Any) -> dict:
+    if isinstance(file_item, dict) and isinstance(file_item.get("file"), dict):
+        return file_item.get("file") or {}
+    return {}
+
+
+def _get_file_item_meta(file_item: Any, nested_file: Optional[dict] = None) -> dict:
+    if not isinstance(file_item, dict):
+        return {}
+    if isinstance(file_item.get("meta"), dict):
+        return file_item.get("meta") or {}
+    nested_file = nested_file if isinstance(nested_file, dict) else _get_file_item_nested_file(file_item)
+    if isinstance(nested_file.get("meta"), dict):
+        return nested_file.get("meta") or {}
+    return {}
+
+
+def _coerce_resource_text(value: Any, max_chars: int) -> str:
+    text = _truncate_text(value, max_chars).replace("\x00", "").strip()
+    return text
+
+
+def _get_file_item_name(file_item: Any) -> str:
+    if not isinstance(file_item, dict):
+        return ""
+    nested_file = _get_file_item_nested_file(file_item)
+    meta = _get_file_item_meta(file_item, nested_file)
+    for value in (
+        file_item.get("name"),
+        file_item.get("filename"),
+        file_item.get("title"),
+        nested_file.get("filename"),
+        nested_file.get("name"),
+        meta.get("name"),
+        meta.get("filename"),
+        meta.get("title"),
+    ):
+        text = _coerce_resource_text(value, _CURRENT_CHAT_RESOURCE_NAME_MAX_CHARS)
+        if text:
+            return text
+    return ""
+
+
+def _get_file_item_media_type(file_item: Any, name: str = "") -> str:
+    if not isinstance(file_item, dict):
+        return ""
+    nested_file = _get_file_item_nested_file(file_item)
+    meta = _get_file_item_meta(file_item, nested_file)
+    for value in (
+        file_item.get("content_type"),
+        file_item.get("mime_type"),
+        file_item.get("mimeType"),
+        nested_file.get("content_type"),
+        nested_file.get("mime_type"),
+        nested_file.get("mimeType"),
+        meta.get("content_type"),
+        meta.get("mime_type"),
+        meta.get("mimeType"),
+    ):
+        text = _coerce_resource_text(value, 120).lower()
+        if text:
+            return text
+
+    guessed, _ = mimetypes.guess_type(name or _get_file_item_name(file_item))
+    return str(guessed or "").strip().lower()
+
+
+def _get_file_item_size(file_item: Any) -> Optional[int]:
+    if not isinstance(file_item, dict):
+        return None
+    nested_file = _get_file_item_nested_file(file_item)
+    meta = _get_file_item_meta(file_item, nested_file)
+    for value in (file_item.get("size"), nested_file.get("size"), meta.get("size")):
+        try:
+            if value is not None and str(value).strip() != "":
+                return int(value)
+        except Exception:
+            continue
+    return None
+
+
+def _get_file_item_collection_name(file_item: Any) -> str:
+    if not isinstance(file_item, dict):
+        return ""
+    nested_file = _get_file_item_nested_file(file_item)
+    meta = _get_file_item_meta(file_item, nested_file)
+    for value in (
+        file_item.get("collection_name"),
+        nested_file.get("collection_name"),
+        meta.get("collection_name"),
+    ):
+        text = _coerce_resource_text(value, 240)
+        if text:
+            return text
+    return ""
+
+
+def _get_file_item_inline_text(file_item: Any, max_chars: int) -> str:
+    if not isinstance(file_item, dict):
+        return ""
+
+    docs = file_item.get("docs")
+    if isinstance(docs, list):
+        parts = []
+        for doc in docs:
+            content = doc.get("content") if isinstance(doc, dict) else doc
+            text = _coerce_resource_text(content, max_chars)
+            if text:
+                parts.append(text)
+            if sum(len(part) for part in parts) >= max_chars:
+                break
+        if parts:
+            return _truncate_text("\n\n".join(parts), max_chars).strip()
+
+    nested_file = _get_file_item_nested_file(file_item)
+    for container in (file_item, nested_file):
+        data = container.get("data") if isinstance(container, dict) else None
+        if isinstance(data, dict):
+            text = _coerce_resource_text(data.get("content"), max_chars)
+            if text:
+                return text
+        text = _coerce_resource_text(container.get("content") if isinstance(container, dict) else None, max_chars)
+        if text:
+            return text
+
+    file_id = _get_attachment_file_id(file_item)
+    if file_id:
+        try:
+            file_obj = Files.get_file_by_id(file_id)
+            if file_obj and isinstance(file_obj.data, dict):
+                text = _coerce_resource_text(file_obj.data.get("content"), max_chars)
+                if text:
+                    return text
+        except Exception:
+            return ""
+
+    return ""
+
+
+def _is_archive_resource(name: str, media_type: str) -> bool:
+    _, ext = os.path.splitext(str(name or "").lower())
+    if ext in _ARCHIVE_RESOURCE_EXTENSIONS:
+        return True
+    return media_type in {
+        "application/gzip",
+        "application/vnd.rar",
+        "application/x-7z-compressed",
+        "application/x-bzip2",
+        "application/x-gtar",
+        "application/x-rar-compressed",
+        "application/x-tar",
+        "application/zip",
+    }
+
+
+def _get_current_chat_resource_access(file_item: Any, name: str, media_type: str) -> str:
+    if not isinstance(file_item, dict):
+        return "unsupported_binary"
+
+    file_type = str(file_item.get("type") or "").strip().lower()
+    if file_type in {"image", "image_url", "input_image"} or media_type.startswith("image/"):
+        return "visual_input"
+
+    if _get_file_item_collection_name(file_item):
+        return "retrievable_text"
+
+    processing_mode = normalize_file_processing_mode(
+        file_item.get("processing_mode")
+        or _get_file_item_meta(file_item).get("processing_mode")
+        or _get_file_item_meta(file_item).get("resolved_processing_mode"),
+        "",
+    )
+    if processing_mode in {
+        FILE_PROCESSING_MODE_RETRIEVAL,
+        FILE_PROCESSING_MODE_FULL_CONTEXT,
+    }:
+        return "retrievable_text"
+
+    if media_type.startswith("text/") or media_type in _TEXT_RESOURCE_MEDIA_TYPES:
+        return "retrievable_text"
+
+    if _is_archive_resource(name, media_type):
+        return "metadata_only"
+
+    if not media_type or media_type == "application/octet-stream":
+        return "unsupported_binary"
+
+    return "metadata_only"
+
+
+def _should_include_current_chat_resource_previews(prompt: Any) -> bool:
+    text = str(prompt or "").strip()
+    return bool(text and _RESOURCE_PREVIEW_INTENT_RE.search(text))
+
+
+def _build_lightweight_resource_preview(file_item: dict, max_chars: int = 1200) -> str:
+    name = _get_file_item_name(file_item)
+    media_type = _get_file_item_media_type(file_item, name)
+    access = _get_current_chat_resource_access(file_item, name, media_type)
+    if access not in {"inline_text_preview", "retrievable_text"}:
+        return ""
+
+    text = _get_file_item_inline_text(file_item, max_chars + 1).strip()
+    if not text:
+        return ""
+
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    if len(text) > max_chars:
+        text = text[:max_chars].rstrip() + "\n...[truncated]"
+    return text
+
+
+def _build_current_chat_resources_context(files: Any, prompt: Any) -> str:
+    if not isinstance(files, list) or not files:
+        return ""
+
+    include_previews = _should_include_current_chat_resource_previews(prompt)
+    resources: list[dict[str, Any]] = []
+    previews: list[tuple[int, str, str]] = []
+    seen: set[str] = set()
+    preview_chars = 0
+
+    for file_item in files:
+        if not isinstance(file_item, dict):
+            continue
+        if _is_code_interpreter_generated_file(file_item):
+            continue
+        if file_item.get("source") == "knowledge":
+            continue
+        if str(file_item.get("type") or "").strip().lower() == "web_search":
+            continue
+
+        file_id = _get_attachment_file_id(file_item)
+        name = _get_file_item_name(file_item)
+        media_type = _get_file_item_media_type(file_item, name) or "unknown"
+        key = file_id or f"{name}:{media_type}"
+        if key in seen:
+            continue
+        seen.add(key)
+
+        access = _get_current_chat_resource_access(file_item, name, media_type)
+        index = len(resources) + 1
+        resource: dict[str, Any] = {
+            "index": index,
+            "name": name or f"resource-{index}",
+            "media_type": media_type,
+            "access": access,
+            "source": "current_chat",
+        }
+        if file_id:
+            resource["id"] = file_id
+        size = _get_file_item_size(file_item)
+        if size is not None:
+            resource["size"] = size
+        collection_name = _get_file_item_collection_name(file_item)
+        if collection_name:
+            resource["collection"] = collection_name
+
+        resources.append(resource)
+
+        if include_previews and preview_chars < _CURRENT_CHAT_RESOURCE_PREVIEW_TOTAL_MAX_CHARS:
+            preview = _build_lightweight_resource_preview(
+                file_item, _CURRENT_CHAT_RESOURCE_PREVIEW_MAX_CHARS
+            )
+            if preview:
+                remaining = _CURRENT_CHAT_RESOURCE_PREVIEW_TOTAL_MAX_CHARS - preview_chars
+                if len(preview) > remaining:
+                    preview = preview[:remaining].rstrip() + "\n...[truncated]"
+                preview_chars += len(preview)
+                previews.append((index, resource["name"], preview))
+
+        if len(resources) >= _CURRENT_CHAT_RESOURCES_MAX_ITEMS:
+            break
+
+    if not resources:
+        return ""
+
+    lines = [
+        "Current conversation resources for this chat.",
+        "<current_chat_resources>",
+    ]
+    for resource in resources:
+        serialized = json.dumps(resource, ensure_ascii=False, sort_keys=True)
+        lines.append(html.escape(serialized, quote=False))
+    lines.append("</current_chat_resources>")
+
+    if previews:
+        lines.append("<current_chat_resource_previews>")
+        for index, name, preview in previews:
+            safe_name = html.escape(name, quote=True)
+            safe_preview = html.escape(preview, quote=False)
+            lines.append(f'<resource_preview index="{index}" name="{safe_name}">')
+            lines.append(safe_preview)
+            lines.append("</resource_preview>")
+        lines.append("</current_chat_resource_previews>")
+
+    return "\n".join(lines).strip()
+
+
 _DATA_IMAGE_MARKDOWN_RE = re.compile(
     r"!\[[^\]]*\]\((data:image/[^)]+)\)", re.IGNORECASE
 )
@@ -844,6 +1186,32 @@ def _has_visible_assistant_output(content_blocks: Any, message_files: Any) -> bo
     return _has_nonempty_text_content(content_blocks) or _has_visible_message_files(
         message_files
     )
+
+
+def _append_text_to_content_blocks(content_blocks: Any, text: str) -> Optional[dict]:
+    """Append visible assistant text without mutating non-text blocks.
+
+    Tool result blocks may store structured list/dict content. Streaming text must
+    start a fresh text block after them instead of assuming the last block is text.
+    """
+    if not isinstance(content_blocks, list) or not isinstance(text, str) or not text:
+        return None
+
+    if (
+        not content_blocks
+        or not isinstance(content_blocks[-1], dict)
+        or str(content_blocks[-1].get("type") or "").strip().lower() != "text"
+        or not isinstance(content_blocks[-1].get("content"), str)
+    ):
+        content_blocks.append(
+            {
+                "type": "text",
+                "content": "",
+            }
+        )
+
+    content_blocks[-1]["content"] += text
+    return content_blocks[-1]
 
 
 def _consume_stream_image_delta(
@@ -4694,6 +5062,17 @@ async def process_chat_payload(request, form_data, user, metadata, model, tasks=
     except Exception as e:
         log.exception(e)
 
+    current_chat_resources_context = _build_current_chat_resources_context(
+        metadata.get("files") or [],
+        get_last_user_message(form_data.get("messages", [])),
+    )
+    if current_chat_resources_context:
+        form_data["messages"] = add_or_update_system_message(
+            current_chat_resources_context,
+            form_data.get("messages", []),
+        )
+        metadata["current_chat_resources_context"] = current_chat_resources_context
+
     # Server side tools
     tool_ids = metadata.get("tool_ids", None)
     # Client side tools
@@ -6458,24 +6837,9 @@ async def process_chat_response(
                                             reasoning_block
                                         )
 
-                                        content_blocks.append(
-                                            {
-                                                "type": "text",
-                                                "content": "",
-                                            }
-                                        )
-
                                     content = f"{content}{value}"
-                                    if not content_blocks:
-                                        content_blocks.append(
-                                            {
-                                                "type": "text",
-                                                "content": "",
-                                            }
-                                        )
-
-                                    content_blocks[-1]["content"] = (
-                                        content_blocks[-1]["content"] + value
+                                    _append_text_to_content_blocks(
+                                        content_blocks, value
                                     )
 
                                     if DETECT_REASONING:
@@ -7730,8 +8094,6 @@ async def process_chat_response(
                                 "stream": True,
                                 "messages": followup_messages,
                             }
-                            if form_data.get("tools"):
-                                payload["tools"] = form_data["tools"]
 
                             res = await generate_chat_completion(request, payload, user)
 
@@ -7760,15 +8122,9 @@ async def process_chat_response(
                                     )
                                     msg_content = msg.get("content")
                                     if isinstance(msg_content, str) and msg_content:
-                                        if (
-                                            content_blocks
-                                            and content_blocks[-1].get("type") == "text"
-                                        ):
-                                            content_blocks[-1]["content"] += msg_content
-                                        else:
-                                            content_blocks.append(
-                                                {"type": "text", "content": msg_content}
-                                            )
+                                        _append_text_to_content_blocks(
+                                            content_blocks, msg_content
+                                        )
                         except Exception as e:
                             log.exception(
                                 "[TOOL ORCH] fake_results_followup_error: %s", e
@@ -8717,8 +9073,6 @@ async def process_chat_response(
                                 *convert_content_blocks_to_messages(finalize_blocks),
                             ],
                         }
-                        if form_data.get("tools"):
-                            fallback_payload["tools"] = form_data["tools"]
 
                         res = await generate_chat_completion(
                             request, fallback_payload, user
@@ -8763,15 +9117,9 @@ async def process_chat_response(
                                     msg_content = msg.get("reasoning_content")
 
                                 if isinstance(msg_content, str) and msg_content:
-                                    if (
-                                        content_blocks
-                                        and content_blocks[-1].get("type") == "text"
-                                    ):
-                                        content_blocks[-1]["content"] += msg_content
-                                    else:
-                                        content_blocks.append(
-                                            {"type": "text", "content": msg_content}
-                                        )
+                                    _append_text_to_content_blocks(
+                                        content_blocks, msg_content
+                                    )
 
                                 await event_emitter(
                                     {
