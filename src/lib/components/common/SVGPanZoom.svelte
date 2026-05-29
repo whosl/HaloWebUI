@@ -7,12 +7,12 @@
 	import panzoom, { type PanZoom } from 'panzoom';
 	import DOMPurify from 'dompurify';
 
-	import { onMount, getContext } from 'svelte';
-	const i18n = getContext('i18n');
+	import { getContext } from 'svelte';
+	import type { Writable } from 'svelte/store';
+	const i18n: Writable<any> = getContext('i18n');
 
 	import { copyToClipboard } from '$lib/utils';
 
-	import DocumentDuplicate from '../icons/DocumentDuplicate.svelte';
 	import Tooltip from './Tooltip.svelte';
 	import Clipboard from '../icons/Clipboard.svelte';
 	import Reset from '../icons/Reset.svelte';
@@ -23,9 +23,14 @@
 	export let content = '';
 
 	let instance: PanZoom;
+	let sanitizedSvg = '';
 
 	let sceneParentElement: HTMLElement;
 	let sceneElement: HTMLElement;
+
+	$: sanitizedSvg = DOMPurify.sanitize(svg, {
+		USE_PROFILES: { svg: true, svgFilters: true }
+	});
 
 	$: if (sceneElement) {
 		instance = panzoom(sceneElement, {
@@ -42,14 +47,14 @@
 	};
 
 	const downloadAsSVG = () => {
-		const svgBlob = new Blob([svg], { type: 'image/svg+xml' });
+		const svgBlob = new Blob([sanitizedSvg], { type: 'image/svg+xml' });
 		saveAs(svgBlob, `diagram.svg`);
 	};
 </script>
 
 <div bind:this={sceneParentElement} class="relative {className}">
 	<div bind:this={sceneElement} class="flex h-full max-h-full justify-center items-center">
-		{@html svg}
+		{@html sanitizedSvg}
 	</div>
 
 	{#if content}

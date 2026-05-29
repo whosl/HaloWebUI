@@ -311,6 +311,10 @@
 				}
 			}
 		}
+		const defaultRoute = `${builtinModelMeta?.default_image_route ?? ''}`.trim();
+		if (defaultRoute && options.some((option) => option.value === defaultRoute)) {
+			return defaultRoute;
+		}
 		return 'generations';
 	};
 

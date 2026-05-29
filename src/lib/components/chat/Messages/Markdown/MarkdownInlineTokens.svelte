@@ -4,8 +4,9 @@
 
 	import type { Token } from 'marked';
 	import { getContext } from 'svelte';
+	import type { Writable } from 'svelte/store';
 
-	const i18n = getContext('i18n');
+	const i18n: Writable<any> = getContext('i18n');
 
 	import { WEBUI_BASE_URL } from '$lib/constants';
 	import { copyToClipboard, unescapeHtml } from '$lib/utils';
@@ -18,6 +19,11 @@
 		rewriteGeneratedFileHtmlLinks,
 		type GeneratedMessageFile
 	} from '$lib/utils/generated-file-links';
+	import {
+		buildLocalFileIframeSrc,
+		resolveLocalFileIframeSrcFromHtml,
+		resolveSafeMarkdownUrl
+	} from '$lib/utils/html-safety';
 	import KatexRenderer from './KatexRenderer.svelte';
 	import Source from './Source.svelte';
 	import SourceToken from './SourceToken.svelte';
@@ -32,51 +38,72 @@
 	let renderTokens: RenderableHtmlToken[] = [];
 	$: renderTokens = mergeSvgMarkupTokens(tokens);
 
-	const resolveLinkHref = (href: string) =>
-		resolveGeneratedFileDownloadUrl(href, generatedFiles) ?? href;
+	const resolveLinkHref = (href: string) => {
+		const resolved = resolveGeneratedFileDownloadUrl(href, generatedFiles) ?? href;
+		return resolveSafeMarkdownUrl(resolved, { allowHash: true, allowRelative: true });
+	};
 
 	const resolveContentSrc = (href: string) =>
 		resolveGeneratedFileContentUrl(href, generatedFiles) ?? href;
 
+	const resolveImageSrc = (href: string) =>
+		resolveSafeMarkdownUrl(resolveContentSrc(href), {
+			allowHash: false,
+			allowRelative: true,
+			allowDataImage: true
+		});
+
 	const resolveDownloadName = (href: string, label: string = '') =>
 		getDataUrlDownloadName(href, label);
+
+	const toText = (value: unknown) => String(value ?? '');
+	const decodeHtmlText = (value: unknown) => unescapeHtml(toText(value)) ?? '';
 </script>
 
 {#each renderTokens as token}
 	{#if token.type === 'escape'}
 		{#if charAnimation}
-			{#each [...unescapeHtml(token.text)] as char}<span class="stream-char">{char}</span>{/each}
+			{#each [...decodeHtmlText(token.text)] as char}<span class="stream-char">{char}</span>{/each}
 		{:else}
-			{unescapeHtml(token.text)}
+			{decodeHtmlText(token.text)}
 		{/if}
 	{:else if token.type === 'html'}
-		{@const isSvgMarkupToken = isSvgMarkup(token.text)}
+		{@const tokenText = toText(token.text)}
+		{@const isSvgMarkupToken = isSvgMarkup(tokenText)}
+		{@const iframeSrc = resolveLocalFileIframeSrcFromHtml(tokenText, WEBUI_BASE_URL)}
 		{@const html = rewriteDataUrlDownloadLinks(
 			rewriteGeneratedFileHtmlLinks(
-				DOMPurify.sanitize(token.text, { ADD_ATTR: ['style'] }),
+				DOMPurify.sanitize(tokenText, { ADD_ATTR: ['style'] }),
 				generatedFiles
 			)
 		)}
 		{#if isSvgMarkupToken}
-			<span class="font-mono whitespace-pre-wrap break-all">{token.text}</span>
+			<span class="font-mono whitespace-pre-wrap break-all">{tokenText}</span>
 		{:else if html && html.includes('<video')}
 			{@html html}
-		{:else if token.text.includes(`<iframe src="${WEBUI_BASE_URL}/api/v1/files/`)}
-			{@html `${token.text}`}
-		{:else if token.text.includes(`<source_id`)}
+		{:else if iframeSrc}
+			<iframe
+				src={iframeSrc}
+				title="Generated file preview"
+				width="100%"
+				frameborder="0"
+				sandbox="allow-scripts"
+				class="min-h-80 rounded-lg border border-gray-100 dark:border-gray-800"
+			></iframe>
+		{:else if tokenText.includes(`<source_id`)}
 			<Source {id} {token} onClick={onSourceClick} />
 		{:else}
 			{@html html}
 		{/if}
 	{:else if token.type === 'link'}
 		{@const href = resolveLinkHref(token.href ?? '')}
-		{@const download = resolveDownloadName(href, token.text ?? '')}
-		{#if token.tokens}
+		{@const download = href ? resolveDownloadName(href, token.text ?? '') : null}
+		{#if href && token.tokens}
 			<a
 				{href}
 				target={download ? undefined : '_blank'}
 				download={download ?? undefined}
-				rel="nofollow"
+				rel="noopener noreferrer nofollow"
 				title={token.title}
 			>
 				<svelte:self
@@ -87,17 +114,32 @@
 					{generatedFiles}
 				/>
 			</a>
-		{:else}
+		{:else if token.tokens}
+			<svelte:self
+				id={`${id}-a`}
+				tokens={token.tokens}
+				{charAnimation}
+				{onSourceClick}
+				{generatedFiles}
+			/>
+		{:else if href}
 			<a
 				{href}
 				target={download ? undefined : '_blank'}
 				download={download ?? undefined}
-				rel="nofollow"
-				title={token.title}>{token.text}</a
+				rel="noopener noreferrer nofollow"
+				title={token.title}>{toText(token.text)}</a
 			>
+		{:else}
+			{toText(token.text)}
 		{/if}
 	{:else if token.type === 'image'}
-		<Image src={resolveContentSrc(token.href ?? '')} alt={token.text} />
+		{@const src = resolveImageSrc(token.href ?? '')}
+		{#if src}
+			<Image {src} alt={toText(token.text)} />
+		{:else}
+			{toText(token.text)}
+		{/if}
 	{:else if token.type === 'strong'}
 		<strong>
 			<svelte:self
@@ -124,9 +166,9 @@
 		<code
 			class="codespan cursor-pointer"
 			on:click={() => {
-				copyToClipboard(unescapeHtml(token.text));
+				copyToClipboard(decodeHtmlText(token.text));
 				toast.success($i18n.t('Copied to clipboard'));
-			}}>{unescapeHtml(token.text)}</code
+			}}>{decodeHtmlText(token.text)}</code
 		>
 	{:else if token.type === 'br'}
 		<br />
@@ -145,21 +187,24 @@
 			<KatexRenderer content={token.text} source={token.raw} displayMode={false} />
 		{/if}
 	{:else if token.type === 'iframe'}
-		<iframe
-			src="{WEBUI_BASE_URL}/api/v1/files/{token.fileId}/content"
-			title={token.fileId}
-			width="100%"
-			frameborder="0"
-			sandbox="allow-scripts"
-			onload="this.style.height=(this.contentWindow.document.body.scrollHeight+20)+'px';"
-		></iframe>
+		{@const iframeSrc = buildLocalFileIframeSrc(token.fileId, WEBUI_BASE_URL)}
+		{#if iframeSrc}
+			<iframe
+				src={iframeSrc}
+				title={toText(token.fileId)}
+				width="100%"
+				frameborder="0"
+				sandbox="allow-scripts"
+				class="min-h-80 rounded-lg border border-gray-100 dark:border-gray-800"
+			></iframe>
+		{/if}
 	{:else if token.type === 'citation'}
 		<SourceToken {id} {token} onClick={onSourceClick} />
 	{:else if token.type === 'text'}
 		{#if charAnimation}
-			{#each [...(token.raw ?? token.text)] as char}<span class="stream-char">{char}</span>{/each}
+			{#each [...toText(token.raw ?? token.text)] as char}<span class="stream-char">{char}</span>{/each}
 		{:else}
-			{token.raw ?? token.text}
+			{toText(token.raw ?? token.text)}
 		{/if}
 	{/if}
 {/each}

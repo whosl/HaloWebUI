@@ -2,12 +2,30 @@ import { WEBUI_API_BASE_URL } from '$lib/constants';
 import type { Banner } from '$lib/types';
 import { parseJsonResponse } from '../response';
 
+export type PromptSuggestion = {
+	title: string[];
+	content: string;
+};
+
+type DirectConnectionsConfig = Record<string, unknown> & {
+	ENABLE_BASE_MODELS_CACHE?: boolean;
+	ENABLE_DIRECT_CONNECTIONS?: boolean;
+};
+
+const getErrorDetail = (error: unknown) => {
+	if (error && typeof error === 'object' && 'detail' in error) {
+		return (error as { detail?: unknown }).detail;
+	}
+
+	return undefined;
+};
+
 export const importConfig = async (
 	token: string,
-	config,
+	config: unknown,
 	mode: 'merge' | 'replace' = 'replace'
 ) => {
-	let error = null;
+	let error: unknown = null;
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/import`, {
 		method: 'POST',
@@ -28,7 +46,7 @@ export const importConfig = async (
 		});
 
 	if (error) {
-		throw error?.detail ?? error;
+		throw getErrorDetail(error) ?? error;
 	}
 
 	return res;
@@ -84,7 +102,9 @@ export const getConnectionsConfig = async (token: string) => {
 
 		return res;
 	} catch (_err) {
-		const direct = await getDirectConnectionsConfig(token).catch(() => ({}));
+		const direct = await getDirectConnectionsConfig(token).catch(
+			(): DirectConnectionsConfig => ({})
+		);
 		return {
 			...(direct ?? {}),
 			ENABLE_BASE_MODELS_CACHE: direct?.ENABLE_BASE_MODELS_CACHE ?? true
@@ -128,7 +148,9 @@ export const setConnectionsConfig = async (token: string, config: object) => {
 	}
 };
 
-export const getDirectConnectionsConfig = async (token: string) => {
+export const getDirectConnectionsConfig = async (
+	token: string
+): Promise<DirectConnectionsConfig> => {
 	let error = null;
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/direct_connections`, {
@@ -138,7 +160,7 @@ export const getDirectConnectionsConfig = async (token: string) => {
 			Authorization: `Bearer ${token}`
 		}
 	})
-		.then(parseJsonResponse)
+		.then((response) => parseJsonResponse<DirectConnectionsConfig>(response))
 		.catch((err) => {
 			console.log(err);
 			error = err.detail;
@@ -147,6 +169,10 @@ export const getDirectConnectionsConfig = async (token: string) => {
 
 	if (error) {
 		throw error;
+	}
+
+	if (!res) {
+		throw new Error('Failed to load direct connections config.');
 	}
 
 	return res;
@@ -594,7 +620,10 @@ export const setModelsConfig = async (token: string, config: object) => {
 	return res;
 };
 
-export const setDefaultPromptSuggestions = async (token: string, promptSuggestions: string) => {
+export const setDefaultPromptSuggestions = async (
+	token: string,
+	promptSuggestions: PromptSuggestion[]
+) => {
 	let error = null;
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/suggestions`, {
@@ -631,7 +660,7 @@ export const getBanners = async (token: string): Promise<Banner[]> => {
 			Authorization: `Bearer ${token}`
 		}
 	})
-		.then(parseJsonResponse)
+		.then((response) => parseJsonResponse<Banner[]>(response))
 		.catch((err) => {
 			console.log(err);
 			error = err.detail;
@@ -642,10 +671,14 @@ export const getBanners = async (token: string): Promise<Banner[]> => {
 		throw error;
 	}
 
+	if (!res) {
+		throw new Error('Failed to load banners.');
+	}
+
 	return res;
 };
 
-export const setBanners = async (token: string, banners: Banner[]) => {
+export const setBanners = async (token: string, banners: Banner[]): Promise<Banner[]> => {
 	let error = null;
 
 	const res = await fetch(`${WEBUI_API_BASE_URL}/configs/banners`, {
@@ -658,7 +691,7 @@ export const setBanners = async (token: string, banners: Banner[]) => {
 			banners: banners
 		})
 	})
-		.then(parseJsonResponse)
+		.then((response) => parseJsonResponse<Banner[]>(response))
 		.catch((err) => {
 			console.log(err);
 			error = err.detail;
@@ -667,6 +700,10 @@ export const setBanners = async (token: string, banners: Banner[]) => {
 
 	if (error) {
 		throw error;
+	}
+
+	if (!res) {
+		throw new Error('Failed to save banners.');
 	}
 
 	return res;

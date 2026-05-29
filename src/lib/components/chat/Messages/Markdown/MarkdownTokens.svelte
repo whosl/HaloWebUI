@@ -1,7 +1,8 @@
 <script lang="ts">
 	import DOMPurify from 'dompurify';
 	import { createEventDispatcher, getContext } from 'svelte';
-	const i18n = getContext('i18n');
+	import type { Writable } from 'svelte/store';
+	const i18n: Writable<any> = getContext('i18n');
 
 	import fileSaver from 'file-saver';
 	const { saveAs } = fileSaver;
@@ -29,6 +30,10 @@
 		rewriteGeneratedFileHtmlLinks,
 		type GeneratedMessageFile
 	} from '$lib/utils/generated-file-links';
+	import {
+		buildLocalFileIframeSrc,
+		resolveLocalFileIframeSrcFromHtml
+	} from '$lib/utils/html-safety';
 
 	const dispatch = createEventDispatcher();
 
@@ -73,13 +78,24 @@
 		return 'h' + depth;
 	};
 
-	const exportTableToCSVHandler = (token, tokenIdx = 0) => {
+	const getCheckboxChecked = (event: Event) =>
+		(event.currentTarget instanceof HTMLInputElement ? event.currentTarget.checked : false);
+
+	type CsvCellToken = { text?: string; tokens?: Array<{ text?: string }> };
+	type CsvTableToken = { header?: CsvCellToken[]; rows?: CsvCellToken[][] };
+
+	const getCsvCellText = (cell: CsvCellToken) =>
+		cell.tokens?.map((token) => token.text ?? '').join('') ?? cell.text ?? '';
+
+	const exportTableToCSVHandler = (token: CsvTableToken, tokenIdx = 0) => {
 		console.log('Exporting table to CSV');
 
-		const header = token.header.map((headerCell) => `"${headerCell.text.replace(/"/g, '""')}"`);
-		const rows = token.rows.map((row) =>
+		const header = (token.header ?? []).map(
+			(headerCell) => `"${getCsvCellText(headerCell).replace(/"/g, '""')}"`
+		);
+		const rows = (token.rows ?? []).map((row) =>
 			row.map((cell) => {
-				const cellContent = cell.tokens.map((token) => token.text).join('');
+				const cellContent = getCsvCellText(cell);
 				return `"${cellContent.replace(/"/g, '""')}"`;
 			})
 		);
@@ -394,7 +410,7 @@
 											tokenIdx: tokenIdx,
 											item: item,
 											itemIdx: itemIdx,
-											checked: e.target.checked
+											checked: getCheckboxChecked(e)
 										});
 									}}
 								/>
@@ -430,7 +446,7 @@
 											tokenIdx: tokenIdx,
 											item: item,
 											itemIdx: itemIdx,
-											checked: e.target.checked
+											checked: getCheckboxChecked(e)
 										});
 									}}
 								/>
@@ -508,6 +524,7 @@
 			{/if}
 		{:else if token.type === 'html'}
 			{@const isSvgMarkupToken = isSvgMarkup(token.text)}
+			{@const iframeSrc = resolveLocalFileIframeSrcFromHtml(token.text, WEBUI_BASE_URL)}
 			{@const html = rewriteDataUrlDownloadLinks(
 				rewriteGeneratedFileHtmlLinks(
 					DOMPurify.sanitize(token.text, { ADD_ATTR: ['style'] }),
@@ -535,21 +552,32 @@
 				/>
 			{:else if html && html.includes('<video')}
 				{@html html}
-			{:else if token.text.includes(`<iframe src="${WEBUI_BASE_URL}/api/v1/files/`)}
-				{@html `${token.text}`}
+			{:else if iframeSrc}
+				<iframe
+					src={iframeSrc}
+					title="Generated file preview"
+					width="100%"
+					frameborder="0"
+					sandbox="allow-scripts"
+					class="min-h-80 rounded-lg border border-gray-100 dark:border-gray-800"
+				></iframe>
 			{:else if token.text.includes(`<source_id`)}
 				<Source {id} {token} onClick={onSourceClick} />
 			{:else}
 				{@html html}
 			{/if}
 		{:else if token.type === 'iframe'}
-			<iframe
-				src="{WEBUI_BASE_URL}/api/v1/files/{token.fileId}/content"
-				title={token.fileId}
-				width="100%"
-				frameborder="0"
-				onload="this.style.height=(this.contentWindow.document.body.scrollHeight+20)+'px';"
-			></iframe>
+			{@const iframeSrc = buildLocalFileIframeSrc(token.fileId, WEBUI_BASE_URL)}
+			{#if iframeSrc}
+				<iframe
+					src={iframeSrc}
+					title={token.fileId}
+					width="100%"
+					frameborder="0"
+					sandbox="allow-scripts"
+					class="min-h-80 rounded-lg border border-gray-100 dark:border-gray-800"
+				></iframe>
+			{/if}
 		{:else if token.type === 'paragraph'}
 			<p dir="auto">
 				<MarkdownInlineTokens

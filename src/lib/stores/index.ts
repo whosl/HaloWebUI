@@ -28,7 +28,7 @@ export const USAGE_POOL: Writable<null | string[]> = writable(null);
 export const theme = writable('system');
 
 export const shortCodesToEmojis = writable(
-	Object.entries(emojiShortCodes).reduce((acc, [key, value]) => {
+	Object.entries(emojiShortCodes).reduce<Record<string, string>>((acc, [key, value]) => {
 		if (typeof value === 'string') {
 			acc[value] = key;
 		} else {
@@ -217,6 +217,7 @@ type Settings = {
 	speechAutoSend?: boolean;
 	responseAutoPlayback?: boolean;
 	responseAutoCopy?: boolean;
+	responseHtmlFormat?: boolean;
 	audio?: AudioSettings;
 	showUsername?: boolean;
 	highContrastMode?: boolean;
@@ -230,6 +231,7 @@ type Settings = {
 	autoFollowUps?: boolean;
 	detectArtifacts?: boolean;
 	svgPreviewAutoOpen?: boolean;
+	splitLargeChunks?: boolean;
 	splitLargeDeltas?: boolean;
 	chatDirection?: 'LTR' | 'RTL' | 'auto';
 	landingPageMode?: string;
@@ -265,6 +267,7 @@ type Settings = {
 	scrollOnBranchChange?: boolean;
 	stylizedPdfExport?: boolean;
 	showFloatingActionButtons?: boolean;
+	memory?: boolean;
 	floatingActionButtons?:
 		| {
 				id: string;
@@ -384,4 +387,11 @@ type SessionUser = {
 	name: string;
 	role: string;
 	profile_image_url: string;
+	permissions?: {
+		chat?: {
+			temporary?: boolean;
+			[key: string]: unknown;
+		};
+		[key: string]: unknown;
+	};
 };

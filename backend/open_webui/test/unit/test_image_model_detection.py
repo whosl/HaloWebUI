@@ -11,11 +11,12 @@ from open_webui.routers.images import (  # noqa: E402
     _classify_grok_image_model,
     _classify_openai_image_model,
     _extract_generated_images_from_openai_response,
+    _should_parse_openai_image_response_as_stream,
     load_b64_image_data,
 )
 
 
-def test_openai_dedicated_image_model_uses_images_mode_for_relays():
+def test_openai_dedicated_image_model_keeps_generations_default_for_unannotated_relays():
     classified = _classify_openai_image_model(
         {
             "id": "openai/gpt-image-1",
@@ -31,6 +32,7 @@ def test_openai_dedicated_image_model_uses_images_mode_for_relays():
     assert classified["generation_mode"] == "openai_images"
     assert classified["text_output_supported"] is False
     assert classified["detection_method"] == "metadata"
+    assert classified["supported_image_routes"] == ["generations", "chat", "edits"]
     assert classified["default_image_route"] == "generations"
 
 
@@ -119,7 +121,7 @@ def test_openai_official_gpt_image_family_prefers_images_endpoint_mode():
     assert classified["supports_background"] is True
 
 
-def test_openai_compat_gpt_image_with_model_prefix_exposes_manual_edit_route():
+def test_openai_compat_gpt_image_without_endpoint_metadata_defaults_to_generations():
     classified = _classify_openai_image_model(
         {
             "id": "plus/gpt-image-2",
@@ -135,6 +137,62 @@ def test_openai_compat_gpt_image_with_model_prefix_exposes_manual_edit_route():
     assert classified["supported_image_routes"] == ["generations", "chat", "edits"]
     assert classified["default_image_route"] == "generations"
     assert classified["reference_image_default_route"] == "edits"
+
+
+def test_openai_compat_computetoken_gpt_image_2_defaults_to_generations():
+    classified = _classify_openai_image_model(
+        {
+            "id": "gpt-image-2",
+            "name": "gpt-image-2 | computer",
+        },
+        base_url="https://computetoken.ai/v1",
+        api_config={},
+        source={"effective_source": "personal", "provider": "openai"},
+    )
+
+    assert classified is not None
+    assert classified["generation_mode"] == "openai_images"
+    assert classified["supported_image_routes"] == ["generations", "chat", "edits"]
+    assert classified["default_image_route"] == "generations"
+    assert classified["reference_image_default_route"] == "edits"
+
+
+def test_openai_compat_gpt_image_with_explicit_generations_endpoint_keeps_generations_default():
+    classified = _classify_openai_image_model(
+        {
+            "id": "plus/gpt-image-2",
+            "name": "plus/gpt-image-2",
+            "endpoints": ["/v1/images/generations"],
+        },
+        base_url="https://relay.example/v1",
+        api_config={},
+        source={"effective_source": "personal", "provider": "openai"},
+    )
+
+    assert classified is not None
+    assert classified["generation_mode"] == "openai_images"
+    assert classified["supported_image_routes"] == ["generations"]
+    assert classified["default_image_route"] == "generations"
+    assert classified["reference_image_default_route"] == ""
+
+
+def test_openai_compat_gpt_image_with_nested_metadata_endpoint_keeps_generations_default():
+    classified = _classify_openai_image_model(
+        {
+            "id": "plus/gpt-image-2",
+            "name": "plus/gpt-image-2",
+            "metadata": {"endpoints": ["/v1/images/generations"]},
+        },
+        base_url="https://relay.example/v1",
+        api_config={},
+        source={"effective_source": "personal", "provider": "openai"},
+    )
+
+    assert classified is not None
+    assert classified["generation_mode"] == "openai_images"
+    assert classified["supported_image_routes"] == ["generations"]
+    assert classified["default_image_route"] == "generations"
+    assert classified["reference_image_default_route"] == ""
 
 
 def test_openai_compat_xai_named_model_stays_on_openai_image_route():
@@ -392,7 +450,7 @@ def test_openai_compatible_gemini_image_model_without_preview_suffix_is_detected
     assert classified["generation_mode"] == "openai_chat_image"
 
 
-def test_openai_compatible_gemini_images_endpoint_keeps_chat_reference_route():
+def test_openai_compatible_gemini_images_endpoint_does_not_invent_chat_route():
     classified = _classify_openai_image_model(
         {
             "id": "gemini-3.1-flash-image-preview",
@@ -410,7 +468,7 @@ def test_openai_compatible_gemini_images_endpoint_keeps_chat_reference_route():
 
     assert classified is not None
     assert classified["generation_mode"] == "openai_images"
-    assert classified["supported_image_routes"] == ["generations", "chat"]
+    assert classified["supported_image_routes"] == ["generations"]
     assert classified["default_image_route"] == "generations"
 
 
@@ -447,6 +505,33 @@ def test_load_b64_image_data_normalizes_data_url_mime_type():
     loaded = load_b64_image_data("data:image/png;base64,YWJj")
 
     assert loaded == (b"abc", "image/png")
+
+
+def test_openai_image_stream_detection_does_not_treat_json_response_as_stream():
+    should_parse_stream = _should_parse_openai_image_response_as_stream(
+        {"content-type": "application/json"},
+        '{"data":[{"b64_json":"YWJj"}]}',
+    )
+
+    assert should_parse_stream is False
+
+
+def test_openai_image_stream_detection_accepts_event_stream_header():
+    should_parse_stream = _should_parse_openai_image_response_as_stream(
+        {"content-type": "text/event-stream; charset=utf-8"},
+        '{"data":[]}',
+    )
+
+    assert should_parse_stream is True
+
+
+def test_openai_image_stream_detection_accepts_sse_body_without_header():
+    should_parse_stream = _should_parse_openai_image_response_as_stream(
+        {"content-type": "application/octet-stream"},
+        'data: {"type":"image_generation.completed","b64_json":"YWJj"}\n\n',
+    )
+
+    assert should_parse_stream is True
 
 
 def test_openai_response_extracts_markdown_embedded_image_data():

@@ -5,7 +5,6 @@ import io
 import json
 import logging
 import mimetypes
-import os
 import re
 import time
 from typing import Any, Awaitable, Callable, Optional
@@ -280,25 +279,6 @@ def _redact_upstream_headers(headers: dict[str, Any]) -> dict[str, str]:
         else:
             redacted[header_name] = str(value)
     return redacted
-
-
-def _filter_process_debug_env(env: dict[str, str]) -> dict[str, str]:
-    allowed_keys = (
-        "PATH",
-        "HOME",
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "NO_PROXY",
-        "NODE_OPTIONS",
-        "NODE_EXTRA_CA_CERTS",
-        "NODE_TLS_REJECT_UNAUTHORIZED",
-        "SSL_CERT_FILE",
-        "SSL_CERT_DIR",
-        "REQUESTS_CA_BUNDLE",
-        "CURL_CA_BUNDLE",
-    )
-    return {key: str(env.get(key) or "") for key in allowed_keys if key in env}
 
 
 def _evict_stale_image_models_cache(now: float) -> None:
@@ -848,19 +828,33 @@ def _extract_supported_generation_methods(model: dict) -> set[str]:
     return methods
 
 
-def _extract_endpoint_blob(model: dict) -> str:
-    candidates = [
-        model.get("endpoints"),
-        model.get("supported_endpoints"),
-        model.get("supported_endpoint_types"),
-        model.get("endpoint_type"),
-        model.get("api"),
-        (
-            model.get("architecture", {}).get("endpoints")
-            if isinstance(model.get("architecture"), dict)
-            else None
-        ),
+OPENAI_ENDPOINT_METADATA_KEYS = (
+    "endpoints",
+    "supported_endpoints",
+    "supportedEndpoints",
+    "supported_endpoint_types",
+    "supportedEndpointTypes",
+    "endpoint_type",
+    "endpointType",
+    "api",
+)
+
+
+def _extract_endpoint_like_values(container: Any) -> list[Any]:
+    if not isinstance(container, dict):
+        return []
+
+    return [
+        container.get(key)
+        for key in OPENAI_ENDPOINT_METADATA_KEYS
+        if container.get(key)
     ]
+
+
+def _extract_endpoint_blob(model: dict) -> str:
+    candidates = _extract_endpoint_like_values(model)
+    for container_key in ("architecture", "metadata", "capabilities", "details"):
+        candidates.extend(_extract_endpoint_like_values(model.get(container_key)))
     parts = [_json_blob(candidate) for candidate in candidates if candidate]
     return "\n".join(part for part in parts if part)
 
@@ -930,8 +924,8 @@ def _should_offer_openai_image_edit_route(
     endpoint_routes: Optional[set[str]] = None,
 ) -> bool:
     routes = endpoint_routes or set()
-    if OPENAI_IMAGE_ROUTE_EDITS in routes:
-        return True
+    if routes:
+        return OPENAI_IMAGE_ROUTE_EDITS in routes
     if generation_mode != "openai_images":
         return False
     return _is_openai_image_edit_compatible_model(base_name)
@@ -945,9 +939,7 @@ def _should_offer_openai_chat_image_route(
     endpoint_routes: Optional[set[str]] = None,
 ) -> bool:
     routes = endpoint_routes or set()
-    if routes & {OPENAI_IMAGE_ROUTE_CHAT, OPENAI_IMAGE_ROUTE_RESPONSES}:
-        return False
-    if routes == {OPENAI_IMAGE_ROUTE_EDITS}:
+    if routes:
         return False
     if generation_mode != "openai_images":
         return False
@@ -4749,6 +4741,19 @@ def _parse_openai_image_stream_response(stream_text: str) -> dict[str, Any]:
     return body
 
 
+def _should_parse_openai_image_response_as_stream(
+    headers: Optional[dict[str, Any]], response_text: str
+) -> bool:
+    content_type = str(
+        (headers or {}).get("content-type") or (headers or {}).get("Content-Type") or ""
+    ).lower()
+    if "text/event-stream" in content_type:
+        return True
+
+    # Some relays omit the content type for SSE, so fall back to the body shape.
+    return str(response_text or "").lstrip().startswith("data:")
+
+
 def _build_openai_image_usage(
     body: Any, elapsed_ms: Optional[int]
 ) -> Optional[dict[str, Any]]:
@@ -4844,7 +4849,14 @@ async def _send_openai_image_request(
                 )
                 response_text = response.text
 
-            if expects_stream and response.status_code < 400:
+            response_headers = dict(response.headers)
+            if (
+                expects_stream
+                and response.status_code < 400
+                and _should_parse_openai_image_response_as_stream(
+                    response_headers, response_text
+                )
+            ):
                 response_body = json.dumps(
                     _parse_openai_image_stream_response(response_text),
                     ensure_ascii=False,
@@ -4854,7 +4866,7 @@ async def _send_openai_image_request(
 
             return {
                 "status": response.status_code,
-                "headers": dict(response.headers),
+                "headers": response_headers,
                 "response_body": response_body,
                 "elapsed_ms": int((time.monotonic() - started_at) * 1000),
             }
@@ -5224,7 +5236,9 @@ async def _run_openai_image_split_batch(
                 try:
                     await on_image(index, image_item)
                 except Exception:
-                    log.debug("Failed to emit partial split image result", exc_info=True)
+                    log.debug(
+                        "Failed to emit partial split image result", exc_info=True
+                    )
 
         return image_items
 
@@ -5369,45 +5383,6 @@ async def _generate_via_openai_image_edits_endpoint(
     image_extension = mimetypes.guess_extension(image_mime or "image/png") or ".png"
     image_filename = f"image{image_extension}"
     image_field_name = "image"
-    source_file_id = extract_chat_image_file_id(image_url)
-    source_file = Files.get_file_by_id(source_file_id) if source_file_id else None
-    source_file_meta = (
-        source_file.meta
-        if source_file and isinstance(getattr(source_file, "meta", None), dict)
-        else {}
-    )
-    try:
-        log.info(
-            "openai_image_edit_input model=%s upstream_model=%s source_image_url=%s source_file_id=%s source_file_name=%s source_file_size=%s source_file_sha256=%s resolved_mime=%s resolved_bytes=%s prompt_len=%s prompt_sha256=%s payload_keys=%s multipart_file_fields=%s request_url=%s request_headers=%s server_pid=%s server_cwd=%s server_env=%s",
-            model_id,
-            upstream_model_id,
-            str(image_url or "").strip(),
-            source_file_id or "",
-            source_file_meta.get("name")
-            or getattr(source_file, "filename", None)
-            or "",
-            source_file_meta.get("size") or "",
-            hashlib.sha256(image_bytes).hexdigest(),
-            image_mime or "",
-            len(image_bytes),
-            len(str(prompt or "")),
-            hashlib.sha256(str(prompt or "").encode("utf-8")).hexdigest(),
-            sorted(payload.keys()),
-            [image_field_name],
-            _get_openai_images_edit_url(base_url, api_config),
-            json.dumps(
-                _redact_upstream_headers(headers), ensure_ascii=False, sort_keys=True
-            ),
-            os.getpid(),
-            os.getcwd(),
-            json.dumps(
-                _filter_process_debug_env(os.environ),
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-        )
-    except Exception:
-        pass
     generation_url = _get_openai_images_edit_url(base_url, api_config)
     result, headers = await _send_openai_image_request_with_key_pool(
         provider="openai",
@@ -5427,19 +5402,6 @@ async def _generate_via_openai_image_edits_endpoint(
             }
         ],
     )
-    try:
-        log.info(
-            "openai_image_request_result status=%s elapsed_ms=%s response_headers=%s",
-            result.get("status"),
-            result.get("elapsed_ms"),
-            json.dumps(
-                _redact_upstream_headers(result.get("headers") or {}),
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-        )
-    except Exception:
-        pass
 
     response_status = result.get("status")
     response_body_text = str(result.get("response_body") or "")

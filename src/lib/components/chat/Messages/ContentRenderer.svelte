@@ -17,7 +17,11 @@
 	import { createMessagesList } from '$lib/utils';
 	import { getCitationEntries } from '$lib/utils/citations';
 	import type { GeneratedMessageFile } from '$lib/utils/generated-file-links';
-	import { resolveChatTransitionMode } from '$lib/utils/lobehub-chat-appearance';
+	import {
+		resolveChatTransitionMode,
+		type ChatTransitionMode
+	} from '$lib/utils/lobehub-chat-appearance';
+	import { renderResponseHtmlFormat } from '$lib/utils/response-html-format';
 	import {
 		createEmptySelectionThreads,
 		hashSelectionThreadSource,
@@ -28,7 +32,7 @@
 		type SelectionThread
 	} from '$lib/utils/selection-threads';
 
-	const i18n = getContext('i18n');
+	const i18n: Writable<any> = getContext('i18n');
 	const dispatch = createEventDispatcher();
 
 	type ThreadLayout = {
@@ -66,17 +70,21 @@
 		text: string;
 		html: string;
 	};
+	type MessageModel = any;
+	type MessageSource = Record<string, any>;
+	type FloatingAction = any;
+	type AddMessagesPayload = { modelId?: any; parentId?: any; messages?: any };
 
-	export let id;
-	export let content;
-	export let history;
-	export let model = null;
-	export let sources = null;
+	export let id: string;
+	export let content: string;
+	export let history: any;
+	export let model: MessageModel | null = null;
+	export let sources: MessageSource[] | null = null;
 	export let generatedFiles: GeneratedMessageFile[] = [];
 
 	export let save = false;
 	export let floatingButtons = true;
-	export let actions = [];
+	export let actions: FloatingAction[] = [];
 	export let streaming = false;
 	export let isLastMessage = false;
 	export let forceExpand = false;
@@ -84,8 +92,8 @@
 	export let onSourceClick = () => {};
 	export let onTaskClick = () => {};
 
-	export let onAddMessages = () => {};
-	export let headings = [];
+	export let onAddMessages: (payload: AddMessagesPayload) => void = () => {};
+	export let headings: any[] = [];
 
 	const fallbackSelectionThreadsStore = writable(createEmptySelectionThreads());
 	const fallbackExpandedSelectionThreadId = writable<string | null>(null);
@@ -99,7 +107,8 @@
 		selectionThreadManager?.updateSelectionThreads ?? (() => {});
 
 	let contentContainerElement: HTMLElement | null = null;
-	let currentTransitionMode = 'none';
+	let currentTransitionMode: ChatTransitionMode = 'none';
+	let renderedMessageContent = '';
 	let pendingSelection: PendingSelection | null = null;
 	let pendingSelectionPosition: { top: number; left: number } | null = null;
 	let currentMessageThreads: SelectionThread[] = [];
@@ -108,6 +117,7 @@
 	let messagesContainerElement: HTMLElement | null = null;
 	let syncThreadLayoutsRaf = 0;
 	let hadThreadLayouts = false;
+	let resolvedSourceIds: any[] = [];
 
 	const INLINE_CITATION_SELECTOR = '[data-inline-citation="true"]';
 
@@ -301,6 +311,10 @@
 	}
 
 	$: currentTransitionMode = resolveChatTransitionMode($settings);
+	$: renderedMessageContent =
+		!streaming && ($settings?.responseHtmlFormat ?? false)
+			? renderResponseHtmlFormat(content || '') || (content || '')
+			: content || '';
 
 	const highlightHeading = (headingElement: HTMLElement) => {
 		headingElement.classList.remove('message-outline-anchor-target');
@@ -346,6 +360,47 @@
 				)
 			};
 		}, options);
+	};
+
+	const resolveSourceIds = (sourceList: MessageSource[] | null): any[] => {
+		const ids: any[] = [];
+
+		(sourceList ?? []).forEach((source) => {
+			if (!source || typeof source !== 'object') {
+				return;
+			}
+
+			getCitationEntries(source).forEach(({ metadata }) => {
+				if (model?.info?.meta?.capabilities?.citations == false) {
+					ids.push('N/A');
+					return;
+				}
+
+				const sourceId = metadata?.source ?? 'N/A';
+
+				if (metadata?.name) {
+					ids.push(metadata.name);
+					return;
+				}
+
+				if (
+					typeof sourceId === 'string' &&
+					(sourceId.startsWith('http://') || sourceId.startsWith('https://'))
+				) {
+					ids.push(sourceId);
+				} else {
+					ids.push(source?.source?.name ?? sourceId);
+				}
+			});
+		});
+
+		return ids.filter((item, index) => ids.indexOf(item) === index);
+	};
+
+	$: resolvedSourceIds = resolveSourceIds(sources);
+
+	const handleFloatingAdd = ({ modelId, parentId, messages }: AddMessagesPayload = {}) => {
+		onAddMessages({ modelId, parentId, messages });
 	};
 
 	const computeToolbarPosition = (rect: DOMRect, parentRect: DOMRect) => {
@@ -698,45 +753,13 @@
 		<Markdown
 			bind:headings
 			{id}
-			content={content || ''}
+			content={renderedMessageContent}
 			{model}
 			{save}
 			{streaming}
 			{generatedFiles}
 			transitionMode={currentTransitionMode}
-			sourceIds={(sources ?? []).reduce((acc, s) => {
-				if (!s || typeof s !== 'object') {
-					return acc;
-				}
-
-				let ids = [];
-				getCitationEntries(s).forEach(({ metadata }) => {
-					if (model?.info?.meta?.capabilities?.citations == false) {
-						ids.push('N/A');
-						return;
-					}
-
-					const id = metadata?.source ?? 'N/A';
-
-					if (metadata?.name) {
-						ids.push(metadata.name);
-						return;
-					}
-
-					if (
-						typeof id === 'string' &&
-						(id.startsWith('http://') || id.startsWith('https://'))
-					) {
-						ids.push(id);
-					} else {
-						ids.push(s?.source?.name ?? id);
-					}
-				});
-
-				acc = [...acc, ...ids];
-
-				return acc.filter((item, index) => acc.indexOf(item) === index);
-			}, [])}
+			sourceIds={resolvedSourceIds}
 			{onSourceClick}
 			{onTaskClick}
 			on:update={(e) => {
@@ -790,9 +813,7 @@
 				scheduleThreadLayoutSync();
 			}}
 			onClearPendingSelection={clearPendingSelection}
-			onAdd={({ modelId, parentId, messages }) => {
-				onAddMessages({ modelId, parentId, messages });
-			}}
+			onAdd={handleFloatingAdd}
 		/>
 	{/if}
 </div>

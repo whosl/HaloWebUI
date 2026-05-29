@@ -13,7 +13,12 @@
 	import type { UserSettingsContext } from '$lib/types/user-settings';
 	import type { Banner } from '$lib/types';
 	import { getBackendConfig, getTaskConfig, updateTaskConfig } from '$lib/apis';
-	import { getBanners, setBanners, setDefaultPromptSuggestions } from '$lib/apis/configs';
+	import {
+		getBanners,
+		setBanners,
+		setDefaultPromptSuggestions,
+		type PromptSuggestion
+	} from '$lib/apis/configs';
 	import { updateUserInfo } from '$lib/apis/users';
 	import { getUserPosition } from '$lib/utils';
 	import { getLanguages, changeLanguage, translateWithDefault } from '$lib/i18n';
@@ -71,6 +76,16 @@
 	// null = render all sections with collapsible headers (default behavior).
 	export let activeSection: SectionKey | null = null;
 
+	type ThemePreference = 'light' | 'dark' | 'system';
+	type ImageCompressionPreset = 'auto' | 'standard' | 'medium' | 'small' | 'custom';
+	type BuiltInImageCompressionPreset = Exclude<ImageCompressionPreset, 'custom'>;
+	type ImageCompressionSize = { width: string; height: string };
+	type TaskConfig = {
+		ENABLE_AUTOCOMPLETE_GENERATION?: boolean;
+		AUTOCOMPLETE_GENERATION_INPUT_MAX_LENGTH?: number;
+		[key: string]: unknown;
+	};
+
 	let loading = true;
 	let modelsLoading = false;
 	let modelsLoadError: string | null = null;
@@ -78,7 +93,7 @@
 	// Appearance
 	// Only expose system/dark/light in the UI, but keep legacy theme classes here so we can
 	// reliably clean them up for users upgrading from older versions.
-	const normalizeTheme = (rawTheme: string | null | undefined) => {
+	const normalizeTheme = (rawTheme: string | null | undefined): ThemePreference => {
 		if (rawTheme === 'system' || rawTheme === 'dark' || rawTheme === 'light') return rawTheme;
 		if (rawTheme === 'oled-dark' || rawTheme === 'her' || rawTheme === 'rose-pine dark')
 			return 'dark';
@@ -86,7 +101,7 @@
 		return 'system';
 	};
 	let themes = ['dark', 'light', 'her', 'rose-pine dark', 'rose-pine-dawn light', 'oled-dark'];
-	let selectedTheme = 'system';
+	let selectedTheme: ThemePreference = 'system';
 	let highlighterTheme = DEFAULT_HIGHLIGHTER_THEME;
 	let languages: Awaited<ReturnType<typeof getLanguages>> = [];
 	let lang = '';
@@ -130,6 +145,7 @@
 	let detectArtifacts = true;
 	let svgPreviewAutoOpen = true;
 	let responseAutoCopy = false;
+	let responseHtmlFormat = false;
 	let scrollOnBranchChange = true;
 	let enableMessageQueue = true;
 	let temporaryChatByDefault = false;
@@ -207,13 +223,13 @@
 
 	// Files
 	let imageCompression = false;
-	let imageCompressionSize: { width: string; height: string } = { width: '', height: '' };
+	let imageCompressionSize: ImageCompressionSize = { width: '', height: '' };
 	let imageCompressionInChannels = true;
-	let imageCompressionPreset = 'custom';
+	let imageCompressionPreset: ImageCompressionPreset = 'custom';
 
 	// Admin-only: Banners & Prompt Suggestions (moved from tasks tab)
 	let banners: Banner[] = [];
-	let promptSuggestions: any[] = [];
+	let promptSuggestions: PromptSuggestion[] = [];
 
 	type PreferenceSectionKey = 'appearance' | 'layout' | 'input' | 'chat' | 'advanced';
 	type SectionDirtyState = Record<PreferenceSectionKey, boolean>;
@@ -267,6 +283,7 @@
 			newChatInheritsPreviousState: boolean;
 			collapseCodeBlocks: boolean;
 			collapseHistoricalLongResponses: boolean;
+			responseHtmlFormat: boolean;
 			showInlineCitations: boolean;
 			showMessageOutline: boolean;
 			showFormulaQuickCopyButton: boolean;
@@ -341,15 +358,31 @@
 		height: value?.height === null || value?.height === undefined ? '' : String(value.height)
 	});
 
-	const imageCompressionPresets = {
+	const imageCompressionPresets: Record<BuiltInImageCompressionPreset, ImageCompressionSize> = {
 		auto: { width: '', height: '' },
 		standard: { width: '1920', height: '1080' },
 		medium: { width: '1280', height: '720' },
 		small: { width: '800', height: '600' }
 	};
 
-	const detectPreset = (size: { width: string; height: string }): string => {
-		for (const [key, preset] of Object.entries(imageCompressionPresets)) {
+	const normalizeImageCompressionPreset = (value: unknown): ImageCompressionPreset => {
+		if (
+			value === 'auto' ||
+			value === 'standard' ||
+			value === 'medium' ||
+			value === 'small' ||
+			value === 'custom'
+		) {
+			return value;
+		}
+
+		return 'custom';
+	};
+
+	const detectPreset = (size: ImageCompressionSize): ImageCompressionPreset => {
+		for (const [key, preset] of Object.entries(imageCompressionPresets) as Array<
+			[BuiltInImageCompressionPreset, ImageCompressionSize]
+		>) {
 			if (preset.width === size.width && preset.height === size.height) {
 				return key;
 			}
@@ -357,10 +390,18 @@
 		return 'custom';
 	};
 
-	const applyPreset = (preset: string) => {
-		if (preset !== 'custom' && imageCompressionPresets[preset]) {
+	const applyPreset = (preset: ImageCompressionPreset) => {
+		if (preset !== 'custom') {
 			imageCompressionSize = { ...imageCompressionPresets[preset] };
 			imageCompressionPreset = preset;
+		}
+	};
+
+	const handleImageCompressionPresetChange = (event: CustomEvent<{ value: string }>) => {
+		const preset = normalizeImageCompressionPreset(event.detail?.value);
+		imageCompressionPreset = preset;
+		if (preset !== 'custom') {
+			applyPreset(preset);
 		}
 	};
 
@@ -534,6 +575,7 @@
 			enableAutoScrollOnStreaming
 		},
 		layout: {
+			defaultModelId: resolveDefaultModelId(defaultModelId),
 			showChatTitleInTab,
 			showFeaturedAssistantsOnHome,
 			landingPageMode,
@@ -558,7 +600,6 @@
 			promptSuggestions
 		},
 		chat: {
-			defaultModelId: resolveDefaultModelId(defaultModelId),
 			titleAutoGenerate,
 			autoTags,
 			autoFollowUps,
@@ -571,6 +612,7 @@
 			newChatInheritsPreviousState,
 			collapseCodeBlocks,
 			collapseHistoricalLongResponses,
+			responseHtmlFormat,
 			showInlineCitations,
 			showMessageOutline,
 			showFormulaQuickCopyButton,
@@ -652,6 +694,7 @@
 		newChatInheritsPreviousState = snapshot.newChatInheritsPreviousState;
 		collapseCodeBlocks = snapshot.collapseCodeBlocks;
 		collapseHistoricalLongResponses = snapshot.collapseHistoricalLongResponses;
+		responseHtmlFormat = snapshot.responseHtmlFormat;
 		showInlineCitations = snapshot.showInlineCitations;
 		showMessageOutline = snapshot.showMessageOutline;
 		showFormulaQuickCopyButton = snapshot.showFormulaQuickCopyButton;
@@ -726,6 +769,7 @@
 		enableAutoScrollOnStreaming;
 		collapseCodeBlocks;
 		collapseHistoricalLongResponses;
+		responseHtmlFormat;
 		showInlineCitations;
 		showMessageOutline;
 		showFormulaQuickCopyButton;
@@ -941,8 +985,10 @@
 		layoutSaving = true;
 		try {
 			await ensureNotificationPermission();
+			const resolvedDefaultModelId = resolveDefaultModelId(defaultModelId);
 
 			const payload: Record<string, any> = {
+				models: resolvedDefaultModelId ? [resolvedDefaultModelId] : [],
 				showChatTitleInTab,
 				showFeaturedAssistantsOnHome,
 				landingPageMode,
@@ -957,7 +1003,8 @@
 			await saveSettings(payload);
 			// Admin: save banners
 			if ($user?.role === 'admin') {
-				_banners.set(await setBanners(localStorage.token, banners));
+				const savedBanners = (await setBanners(localStorage.token, banners)) as Banner[];
+				_banners.set(savedBanners);
 			}
 			await tick();
 			startSectionBaselineSync();
@@ -984,13 +1031,13 @@
 			});
 			// Admin: save autocomplete generation task config
 			if ($user?.role === 'admin') {
-				const currentTaskConfig = await getTaskConfig(localStorage.token);
+				const currentTaskConfig = (await getTaskConfig(localStorage.token)) as TaskConfig;
 				await updateTaskConfig(localStorage.token, {
 					...currentTaskConfig,
 					ENABLE_AUTOCOMPLETE_GENERATION: enableAutocompleteGeneration,
 					AUTOCOMPLETE_GENERATION_INPUT_MAX_LENGTH: autocompleteGenerationInputMaxLength
 				});
-				await config.set(await getBackendConfig());
+				await config.set((await getBackendConfig()) as Parameters<typeof config.set>[0]);
 				// Admin: save default prompt suggestions
 				await setDefaultPromptSuggestions(localStorage.token, promptSuggestions);
 			}
@@ -1009,7 +1056,6 @@
 		chatSaving = true;
 		try {
 			await saveSettings({
-				models: resolveDefaultModelId(defaultModelId) ? [resolveDefaultModelId(defaultModelId)] : [],
 				title: {
 					...($settings?.title ?? {}),
 					auto: titleAutoGenerate
@@ -1025,6 +1071,7 @@
 				newChatInheritsPreviousState,
 				collapseCodeBlocks,
 				collapseHistoricalLongResponses,
+				responseHtmlFormat,
 				showInlineCitations,
 				showMessageOutline,
 				showFormulaQuickCopyButton,
@@ -1210,7 +1257,7 @@
 		richTextInput = $settings?.richTextInput ?? true;
 		promptAutocomplete = $settings?.promptAutocomplete ?? false;
 		// Admin: load autocomplete generation task config
-		const adminTaskConfig = await adminTaskConfigPromise;
+		const adminTaskConfig = (await adminTaskConfigPromise) as TaskConfig | null;
 		if (adminTaskConfig) {
 			enableAutocompleteGeneration = adminTaskConfig.ENABLE_AUTOCOMPLETE_GENERATION ?? false;
 			autocompleteGenerationInputMaxLength =
@@ -1224,6 +1271,7 @@
 
 		collapseCodeBlocks = $settings?.collapseCodeBlocks ?? false;
 		collapseHistoricalLongResponses = $settings?.collapseHistoricalLongResponses ?? true;
+		responseHtmlFormat = $settings?.responseHtmlFormat ?? false;
 		showInlineCitations = $settings?.showInlineCitations ?? true;
 		showMessageOutline = $settings?.showMessageOutline ?? true;
 		showFormulaQuickCopyButton = $settings?.showFormulaQuickCopyButton ?? true;
@@ -2208,6 +2256,22 @@
 											/>
 										</div>
 										<div class="flex items-center justify-between glass-item px-4 py-3">
+											<div class="space-y-1 pr-4">
+												<div class="text-sm font-medium">
+													{tr('HTML 格式输出', 'HTML format output')}
+												</div>
+												<div class="text-xs text-gray-500 dark:text-gray-400">
+													{tr(
+														'开启后，回答完成后会被转换为安全的内联 HTML 卡片展示；关闭后继续使用 Markdown。',
+														'When enabled, completed replies are converted into safe inline HTML cards; when disabled, Markdown rendering is unchanged.'
+													)}
+												</div>
+											</div>
+											<Switch
+												bind:state={responseHtmlFormat}
+											/>
+										</div>
+										<div class="flex items-center justify-between glass-item px-4 py-3">
 											<div class="text-sm font-medium">
 												{tr('显示正文引用标签', 'Show Inline Citations')}
 											</div>
@@ -2551,15 +2615,10 @@
 												<div class="text-sm font-medium">
 													{$i18n.t('Image Max Compression Size')}
 												</div>
-												<HaloSelect
-													bind:value={imageCompressionPreset}
-													on:change={(e) => {
-														const preset = e.detail;
-														if (preset !== 'custom') {
-															applyPreset(preset);
-														}
-													}}
-													options={[
+							<HaloSelect
+								bind:value={imageCompressionPreset}
+								on:change={handleImageCompressionPresetChange}
+								options={[
 														{
 															value: 'auto',
 															label: tr(
