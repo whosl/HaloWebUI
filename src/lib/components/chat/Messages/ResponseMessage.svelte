@@ -100,6 +100,7 @@
 	interface MessageType {
 		id: string;
 		model: string;
+		modelName?: string;
 		content: string;
 		files?: {
 			type?: string;
@@ -185,6 +186,11 @@
 		};
 	}
 	type MessageFile = NonNullable<MessageType['files']>[number];
+	type MessageModel = {
+		info?: { meta?: { capabilities?: { reasoning?: boolean } } };
+		actions?: { id: string; [key: string]: unknown }[];
+		[key: string]: unknown;
+	};
 
 	export let chatId = '';
 	export let history;
@@ -533,8 +539,8 @@
 	// 	}
 	// };
 
-	let model = null;
-	$: model = findModelByIdentity($models, message.model);
+	let model: MessageModel | null = null;
+	$: model = findModelByIdentity($models, message.model) as unknown as MessageModel | null;
 	$: stats = getStatsDisplay(message);
 	const toDiscussionArray = (value: unknown) => (Array.isArray(value) ? value : []);
 	const getDiscussionParticipantName = (participant: any): string =>
