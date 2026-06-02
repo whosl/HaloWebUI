@@ -502,6 +502,8 @@ textarea::placeholder {
 }
 
 .markdown-prose img.chat-user-attachment-image {
+	display: block;
+	margin: 0 !important;
 	max-width: min(88px, 70vw) !important;
 	max-height: 88px !important;
 	width: auto !important;

@@ -38,6 +38,39 @@ def test_image_size_auto_keeps_derived_dimensions_safe():
     assert images_router._size_to_gemini_image_size("auto") is None
 
 
+def test_multi_reference_auto_route_prefers_multi_image_capable_route():
+    route = _resolve_openai_image_request_route(
+        {
+            "generation_mode": "openai_images",
+            "supported_image_routes": ["edits", "chat"],
+            "reference_image_default_route": "edits",
+        },
+        None,
+        has_reference_image=True,
+        reference_image_count=2,
+    )
+
+    assert route == "chat"
+
+
+def test_multi_reference_auto_route_rejects_edit_only_model():
+    try:
+        _resolve_openai_image_request_route(
+            {
+                "generation_mode": "openai_images",
+                "supported_image_routes": ["edits"],
+                "reference_image_default_route": "edits",
+            },
+            None,
+            has_reference_image=True,
+            reference_image_count=2,
+        )
+        assert False, "expected multi-reference edit-only route to fail"
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert "一张参考图" in str(exc.detail)
+
+
 def test_chat_image_generation_handler_keeps_explicit_size_before_generate_form(
     monkeypatch,
 ):
@@ -94,6 +127,61 @@ def test_chat_image_generation_handler_keeps_explicit_size_before_generate_form(
             "status": "success",
             "slot_index": 0,
         }
+    ]
+
+
+def test_chat_image_generation_handler_passes_all_uploaded_reference_images(
+    monkeypatch,
+):
+    captured = {}
+    events = []
+
+    async def fake_image_generations(request, form_data, user):
+        captured["form_data"] = form_data
+        return [{"url": "/api/v1/files/generated"}]
+
+    async def fake_event_emitter(event):
+        events.append(event)
+
+    monkeypatch.setattr(middleware, "image_generations", fake_image_generations)
+
+    metadata = {"image_generation_options": {"model": "gpt-image-2"}}
+
+    asyncio.run(
+        middleware.chat_image_generation_handler(
+            request=SimpleNamespace(),
+            form_data={
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": "把图1的人换上图2的衣服",
+                        "files": [
+                            {
+                                "type": "image",
+                                "url": "/api/v1/files/person/content",
+                            },
+                            {
+                                "type": "image",
+                                "url": "/api/v1/files/clothes/content",
+                            },
+                        ],
+                    }
+                ],
+                "stream": False,
+            },
+            extra_params={
+                "__event_emitter__": fake_event_emitter,
+                "__metadata__": metadata,
+            },
+            user=SimpleNamespace(id="user-1", role="admin"),
+        )
+    )
+
+    form_data = captured["form_data"]
+    assert form_data.image_url == "/api/v1/files/person/content"
+    assert form_data.image_urls == [
+        "/api/v1/files/person/content",
+        "/api/v1/files/clothes/content",
     ]
 
 
@@ -2085,6 +2173,10 @@ def test_chat_openai_image_path_receives_requested_batch_size(monkeypatch):
                 model=selected_model,
                 stream=False,
                 image_url="/api/v1/files/source/content",
+                image_urls=[
+                    "/api/v1/files/source/content",
+                    "/api/v1/files/second-source/content",
+                ],
                 image_route_mode="chat",
                 n=4,
                 chat_generation=True,
@@ -2095,6 +2187,11 @@ def test_chat_openai_image_path_receives_requested_batch_size(monkeypatch):
 
     assert result == [{"url": "/api/v1/files/generated"}]
     assert captured["model_id"] == "gpt-image-2"
+    assert captured["image_url"] == "/api/v1/files/source/content"
+    assert captured["image_urls"] == [
+        "/api/v1/files/source/content",
+        "/api/v1/files/second-source/content",
+    ]
     assert captured["n"] == 4
     assert captured["stream"] is False
 
@@ -2199,6 +2296,207 @@ def test_chat_openai_dedicated_image_with_reference_defaults_to_edit_route(monke
     assert captured["image_url"] == "/api/v1/files/source/content"
     assert captured["source"]["key"] == "key-a"
     assert captured["source"]["api_config"]["use_responses_api"] is True
+
+
+def test_chat_openai_dedicated_image_with_multiple_references_uses_chat_route(
+    monkeypatch,
+):
+    same_base_url = "https://relay.example.com/v1"
+    cfg = SimpleNamespace(
+        ENABLE_IMAGE_GENERATION=True,
+        IMAGE_GENERATION_ENGINE="openai",
+        IMAGE_GENERATION_MODEL="",
+        IMAGE_SIZE="auto",
+        IMAGE_ASPECT_RATIO="1:1",
+        IMAGE_RESOLUTION="1k",
+        ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+        IMAGES_OPENAI_API_BASE_URL="",
+        IMAGES_OPENAI_API_KEY="",
+        IMAGES_OPENAI_API_FORCE_MODE=False,
+        IMAGE_MODEL_FILTER_REGEX="",
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=cfg)))
+    user = SimpleNamespace(id="user-1", role="admin")
+
+    monkeypatch.setattr(
+        images_router.openai_router,
+        "_get_openai_user_config",
+        lambda _user: ([same_base_url], ["key-a"], {"0": {"remark": "A"}}),
+    )
+
+    async def fake_discover(_request, _user, engine, source):
+        assert engine == "openai"
+        return [
+            images_router._build_image_model_entry(
+                model_id="gpt-image-2",
+                name="gpt-image-2",
+                generation_mode="openai_images",
+                detection_method="metadata",
+                supports_background=False,
+                supports_batch=True,
+                size_mode="exact",
+                text_output_supported=False,
+                source=source,
+                supported_image_routes=["edits", "chat"],
+                reference_image_default_route="edits",
+            )
+        ]
+
+    captured = {}
+
+    async def fake_chat_image(_request, _user, **kwargs):
+        captured.update(kwargs)
+        return [{"url": "/api/v1/files/generated"}]
+
+    async def fail_images_endpoint(*_args, **_kwargs):
+        raise AssertionError("multi-reference input must not use generations")
+
+    async def fail_edits_endpoint(*_args, **_kwargs):
+        raise AssertionError("multi-reference input must not use single-image edits")
+
+    monkeypatch.setattr(
+        images_router, "_discover_image_models_for_source", fake_discover
+    )
+    monkeypatch.setattr(
+        images_router, "_generate_via_openai_chat_image", fake_chat_image
+    )
+    monkeypatch.setattr(
+        images_router, "_generate_via_openai_images_endpoint", fail_images_endpoint
+    )
+    monkeypatch.setattr(
+        images_router, "_generate_via_openai_image_edits_endpoint", fail_edits_endpoint
+    )
+
+    source = images_router._list_image_provider_sources(
+        request,
+        user,
+        "openai",
+        context="runtime",
+        credential_source="auto",
+    )[0]
+    selected_model = images_router._build_image_model_selection_key(
+        "gpt-image-2", source
+    )
+
+    result = asyncio.run(
+        images_router.image_generations(
+            request,
+            images_router.GenerateImageForm(
+                prompt="use both references",
+                model=selected_model,
+                image_url="/api/v1/files/source/content",
+                image_urls=[
+                    "/api/v1/files/source/content",
+                    "/api/v1/files/style/content",
+                ],
+                chat_generation=True,
+            ),
+            user=user,
+        )
+    )
+
+    assert result == [{"url": "/api/v1/files/generated"}]
+    assert captured["model_id"] == "gpt-image-2"
+    assert captured["image_url"] == "/api/v1/files/source/content"
+    assert captured["image_urls"] == [
+        "/api/v1/files/source/content",
+        "/api/v1/files/style/content",
+    ]
+
+
+def test_chat_openai_dedicated_image_explicit_edit_rejects_multiple_references(
+    monkeypatch,
+):
+    same_base_url = "https://relay.example.com/v1"
+    cfg = SimpleNamespace(
+        ENABLE_IMAGE_GENERATION=True,
+        IMAGE_GENERATION_ENGINE="openai",
+        IMAGE_GENERATION_MODEL="",
+        IMAGE_SIZE="auto",
+        IMAGE_ASPECT_RATIO="1:1",
+        IMAGE_RESOLUTION="1k",
+        ENABLE_IMAGE_GENERATION_SHARED_KEY=False,
+        IMAGES_OPENAI_API_BASE_URL="",
+        IMAGES_OPENAI_API_KEY="",
+        IMAGES_OPENAI_API_FORCE_MODE=False,
+        IMAGE_MODEL_FILTER_REGEX="",
+    )
+    request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(config=cfg)))
+    user = SimpleNamespace(id="user-1", role="admin")
+
+    monkeypatch.setattr(
+        images_router.openai_router,
+        "_get_openai_user_config",
+        lambda _user: ([same_base_url], ["key-a"], {"0": {"remark": "A"}}),
+    )
+
+    async def fake_discover(_request, _user, engine, source):
+        assert engine == "openai"
+        return [
+            images_router._build_image_model_entry(
+                model_id="gpt-image-2",
+                name="gpt-image-2",
+                generation_mode="openai_images",
+                detection_method="metadata",
+                supports_background=False,
+                supports_batch=True,
+                size_mode="exact",
+                text_output_supported=False,
+                source=source,
+                supported_image_routes=["edits", "chat"],
+                reference_image_default_route="edits",
+            )
+        ]
+
+    async def fail_upstream(*_args, **_kwargs):
+        raise AssertionError("multi-reference edit request should fail before upstream")
+
+    monkeypatch.setattr(
+        images_router, "_discover_image_models_for_source", fake_discover
+    )
+    monkeypatch.setattr(
+        images_router, "_generate_via_openai_chat_image", fail_upstream
+    )
+    monkeypatch.setattr(
+        images_router, "_generate_via_openai_images_endpoint", fail_upstream
+    )
+    monkeypatch.setattr(
+        images_router, "_generate_via_openai_image_edits_endpoint", fail_upstream
+    )
+
+    source = images_router._list_image_provider_sources(
+        request,
+        user,
+        "openai",
+        context="runtime",
+        credential_source="auto",
+    )[0]
+    selected_model = images_router._build_image_model_selection_key(
+        "gpt-image-2", source
+    )
+
+    try:
+        asyncio.run(
+            images_router.image_generations(
+                request,
+                images_router.GenerateImageForm(
+                    prompt="use both references",
+                    model=selected_model,
+                    image_url="/api/v1/files/source/content",
+                    image_urls=[
+                        "/api/v1/files/source/content",
+                        "/api/v1/files/style/content",
+                    ],
+                    image_route_mode="edits",
+                    chat_generation=True,
+                ),
+                user=user,
+            )
+        )
+        assert False, "expected explicit edits route with multiple references to fail"
+    except HTTPException as exc:
+        assert exc.status_code == 400
+        assert "一次只支持一张参考图" in str(exc.detail)
 
 
 def test_chat_openai_dedicated_image_without_reference_uses_image_generation_path(

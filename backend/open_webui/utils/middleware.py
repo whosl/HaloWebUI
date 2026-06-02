@@ -2394,9 +2394,9 @@ def _extract_files_from_messages(messages: list[dict]) -> list[dict]:
     return result
 
 
-def _find_latest_image_url_from_messages(messages: Any) -> Optional[str]:
+def _find_latest_image_urls_from_messages(messages: Any) -> list[str]:
     if not isinstance(messages, list):
-        return None
+        return []
 
     for message in reversed(messages):
         if not isinstance(message, dict):
@@ -2405,6 +2405,8 @@ def _find_latest_image_url_from_messages(messages: Any) -> Optional[str]:
         normalized_files = _normalize_message_files(
             [message.get("files"), message.get("content")]
         )
+        urls: list[str] = []
+        seen: set[str] = set()
         for file_item in normalized_files:
             if not isinstance(file_item, dict):
                 continue
@@ -2412,10 +2414,19 @@ def _find_latest_image_url_from_messages(messages: Any) -> Optional[str]:
                 continue
 
             url = str(file_item.get("url") or "").strip()
-            if url:
-                return url
+            if url and url not in seen:
+                seen.add(url)
+                urls.append(url)
 
-    return None
+        if urls:
+            return urls
+
+    return []
+
+
+def _find_latest_image_url_from_messages(messages: Any) -> Optional[str]:
+    urls = _find_latest_image_urls_from_messages(messages)
+    return urls[0] if urls else None
 
 
 def _build_chat_image_generation_result_files(
@@ -4393,26 +4404,37 @@ async def _build_chat_image_generation_local_response(
 
     messages = form_data["messages"]
     user_message = get_last_user_message(messages)
-    source_image_url = _find_latest_image_url_from_messages(messages)
+    source_image_urls = _find_latest_image_urls_from_messages(messages)
+    source_image_url = source_image_urls[0] if source_image_urls else None
     try:
-        source_file_id = extract_chat_image_file_id(source_image_url)
-        source_file = Files.get_file_by_id(source_file_id) if source_file_id else None
-        source_file_meta = (
-            source_file.meta
-            if source_file and isinstance(getattr(source_file, "meta", None), dict)
-            else {}
-        )
+        source_summaries: list[dict[str, Any]] = []
+        for image_url in source_image_urls:
+            source_file_id = extract_chat_image_file_id(image_url)
+            source_file = (
+                Files.get_file_by_id(source_file_id) if source_file_id else None
+            )
+            source_file_meta = (
+                source_file.meta
+                if source_file and isinstance(getattr(source_file, "meta", None), dict)
+                else {}
+            )
+            source_summaries.append(
+                {
+                    "url": image_url,
+                    "file_id": source_file_id or "",
+                    "name": (
+                        source_file_meta.get("name")
+                        or getattr(source_file, "filename", None)
+                        or ""
+                    ),
+                    "size": source_file_meta.get("size") or "",
+                }
+            )
         log.info(
-            "chat_image_generation_source user_id=%s source_image_url=%s source_file_id=%s source_file_name=%s source_file_size=%s",
+            "chat_image_generation_source user_id=%s source_image_count=%s sources=%s",
             getattr(user, "id", None),
-            source_image_url or "",
-            source_file_id or "",
-            (
-                source_file_meta.get("name")
-                or getattr(source_file, "filename", None)
-                or ""
-            ),
-            source_file_meta.get("size") or "",
+            len(source_image_urls),
+            json.dumps(source_summaries, ensure_ascii=False, default=str),
         )
     except Exception:
         pass
@@ -4514,6 +4536,11 @@ async def _build_chat_image_generation_local_response(
                             if image_generation_options.get(key) is not None
                         },
                         **({"image_url": source_image_url} if source_image_url else {}),
+                        **(
+                            {"image_urls": source_image_urls}
+                            if source_image_urls
+                            else {}
+                        ),
                         "chat_generation": True,
                     }
                 ),

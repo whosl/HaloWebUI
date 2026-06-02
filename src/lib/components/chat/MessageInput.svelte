@@ -1190,7 +1190,7 @@
 							>
 								{#if files.length > 0}
 									<div
-										class="px-2.5 mt-0.5 mb-1.5 pt-1.5 flex items-end gap-2 overflow-x-auto scrollbar-none"
+										class="px-2.5 mt-0.5 mb-1.5 pt-1.5 flex max-h-36 flex-wrap items-end gap-2 overflow-y-auto scrollbar-none"
 									>
 										{#each files as file, fileIdx}
 											{#if file.type === 'image'}
