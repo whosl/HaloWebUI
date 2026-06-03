@@ -197,6 +197,22 @@
 		}
 	};
 
+	const startSidebarNewChat = async () => {
+		selectedChatId = null;
+		selectedAssistantScene.set(null);
+
+		const newChatButton = document.getElementById('new-chat-button');
+		if (newChatButton) {
+			newChatButton.click();
+		} else {
+			await goto('/?fresh-chat=true');
+		}
+
+		if ($mobile) {
+			showSidebar.set(false);
+		}
+	};
+
 	const initChannels = async () => {
 		await channels.set(await getChannels(localStorage.token));
 	};
@@ -751,18 +767,7 @@
 					href="/"
 					draggable="false"
 					aria-label={$i18n.t('New Chat')}
-					on:click={async () => {
-						selectedChatId = null;
-						selectedAssistantScene.set(null);
-						await goto('/');
-						const newChatButton = document.getElementById('new-chat-button');
-						setTimeout(() => {
-							newChatButton?.click();
-							if ($mobile) {
-								showSidebar.set(false);
-							}
-						}, 0);
-					}}
+					on:click|preventDefault={startSidebarNewChat}
 				>
 					<ChatBubblePlus className="size-5" strokeWidth="2" />
 					<span class="text-sm font-medium whitespace-nowrap">{$i18n.t('New Chat')}</span>
@@ -814,15 +819,7 @@
 						class={iconButtonClass + ' no-drag-region'}
 						href="/"
 						draggable="false"
-						on:click={async () => {
-							selectedChatId = null;
-							selectedAssistantScene.set(null);
-							await goto('/');
-							const newChatButton = document.getElementById('new-chat-button');
-							setTimeout(() => {
-								newChatButton?.click();
-							}, 0);
-						}}
+						on:click|preventDefault={startSidebarNewChat}
 					>
 						<ChatBubblePlus className="size-5" strokeWidth="2" />
 					</a>

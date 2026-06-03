@@ -936,6 +936,7 @@
 	"Generate prompt pair": "生成提示对",
 	"Generate title with AI": "AI 生成标题",
 	"Generating an image": "正在生成图片",
+	"Saving generated images": "正在保存生成的图片",
 	"Waiting for upstream image service": "正在等待上游图片服务返回",
 	"Generating search query": "生成搜索查询",
 	"Get from": "获取方式：",

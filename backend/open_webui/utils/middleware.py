@@ -2456,17 +2456,26 @@ def _build_chat_image_generation_result_files(
         if slot_index < 0 or slot_index >= slot_count:
             continue
 
-        url = str(image.get("url") or "").strip()
+        url = str(image.get("url") or image.get("content_url") or "").strip()
         if not url:
             continue
 
-        slots[slot_index] = {
+        image_file = {
             "type": "image",
             "url": url,
             "source": "image_generation",
             "status": "success",
             "slot_index": slot_index,
         }
+        file_id = str(image.get("id") or image.get("file_id") or "").strip()
+        if file_id:
+            image_file["id"] = file_id
+        for field in ("id", "name", "filename", "size", "content_type", "content_url"):
+            value = image.get(field)
+            if field != "id" and value is not None and str(value).strip() != "":
+                image_file[field] = value
+
+        slots[slot_index] = image_file
 
     for failure in failures:
         if not isinstance(failure, dict):

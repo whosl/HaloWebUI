@@ -1,13 +1,15 @@
 <script lang="ts">
 	import { models, modelsError, modelsStatus, user } from '$lib/stores';
 	import { getContext } from 'svelte';
+	import type { Writable } from 'svelte/store';
 	import Selector from './ModelSelector/Selector.svelte';
 	import Tooltip from '../common/Tooltip.svelte';
+	import Switch from '$lib/components/common/Switch.svelte';
 	import Spinner from '$lib/components/common/Spinner.svelte';
 	import { getModelChatDisplayName } from '$lib/utils/model-display';
 	import { getModelSelectionId, resolveModelSelectionId } from '$lib/utils/model-identity';
 	import { getTemporaryChatAccess } from '$lib/utils/temporary-chat';
-	const i18n = getContext('i18n');
+	const i18n: Writable<any> = getContext('i18n');
 
 	export let selectedModels = [''];
 	export let disabled = false;
@@ -19,7 +21,8 @@
 	$: canUseMultipleModels =
 		$user?.role === 'admin' || ($user?.permissions?.chat?.multiple_models ?? true);
 	$: selectedModelCount = selectedModels.filter((model) => `${model ?? ''}`.trim()).length;
-	$: discussionDisabled = disabled || !canUseMultipleModels;
+	$: showMultiModelDiscussionToggle = canUseMultipleModels && selectedModels.length >= 2;
+	$: discussionDisabled = disabled || !canUseMultipleModels || selectedModelCount < 2;
 	$: discussionIssue = !canUseMultipleModels
 		? $i18n.t('Multiple models are not enabled for your account')
 		: selectedModelCount < 2
@@ -29,26 +32,7 @@
 						count: maxDiscussionModels
 					})
 				: '';
-	$: showDiscussionIssue = Boolean(
-		discussionIssue &&
-			(!canUseMultipleModels ||
-				multiModelDiscussionEnabled ||
-				selectedModelCount > maxDiscussionModels)
-	);
-
-	const toggleMultiModelDiscussion = () => {
-		if (discussionDisabled) {
-			return;
-		}
-
-		const nextEnabled = !multiModelDiscussionEnabled;
-		if (nextEnabled && selectedModelCount < 2 && selectedModels.length < 2) {
-			selectedModels = [...selectedModels, ''];
-		}
-		multiModelDiscussionEnabled = nextEnabled;
-	};
-
-	$: if (!canUseMultipleModels && multiModelDiscussionEnabled) {
+	$: if ((!canUseMultipleModels || selectedModelCount < 2) && multiModelDiscussionEnabled) {
 		multiModelDiscussionEnabled = false;
 	}
 
@@ -88,10 +72,10 @@
 	{/if}
 
 	{#if selectedModels.length <= 1}
-		<!-- 单模型：保持原有的完整下拉选择器样式 -->
+		<!-- 单模型：添加入口紧跟当前模型，避免被整行布局推到右侧角落。 -->
 		{#each selectedModels as selectedModel, selectedModelIdx}
-			<div class="flex w-full min-w-0 max-w-full items-center gap-1.5">
-				<div class="min-w-0 flex-1 overflow-hidden">
+			<div class="flex w-fit max-w-full min-w-0 items-center gap-1.5">
+				<div class="min-w-0 max-w-full overflow-hidden">
 					<div class="min-w-0 max-w-full">
 						<Selector
 							id={`${selectedModelIdx}`}
@@ -110,13 +94,13 @@
 						<Tooltip content={$i18n.t('Add Model')}>
 							<button
 								class="inline-flex items-center justify-center
-									size-7 rounded-lg
-									text-gray-500 dark:text-gray-400
-									bg-transparent
-									border border-transparent
+									size-7 shrink-0 rounded-xl
+									text-gray-400 dark:text-gray-500
+									bg-white dark:bg-gray-900/70
+									border border-dashed border-gray-300 dark:border-gray-600
 									hover:bg-gray-100/80 dark:hover:bg-gray-800/60
-									hover:border-gray-200/50 dark:hover:border-gray-700/30
-									hover:text-gray-700 dark:hover:text-gray-200
+									hover:border-gray-400 dark:hover:border-gray-500
+									hover:text-gray-600 dark:hover:text-gray-300
 									active:scale-[0.92]
 									transition-all duration-150
 									disabled:opacity-40 disabled:pointer-events-none"
@@ -132,7 +116,7 @@
 									viewBox="0 0 24 24"
 									stroke-width="2"
 									stroke="currentColor"
-									class="size-3.5"
+									class="size-3"
 								>
 									<path stroke-linecap="round" stroke-linejoin="round" d="M12 6v12m6-6H6" />
 								</svg>
@@ -158,7 +142,7 @@
 							showTemporaryChatControl={selectedModelIdx === 0 &&
 								temporaryChatAccess.allowed &&
 								!temporaryChatAccess.enforced}
-							triggerClassName="text-sm rounded-lg bg-transparent shadow-none"
+							triggerClassName="text-sm rounded-lg !border-transparent !bg-transparent !shadow-none hover:!border-transparent hover:!bg-transparent dark:!border-transparent dark:!bg-transparent dark:hover:!border-transparent dark:hover:!bg-transparent"
 							bind:value={selectedModel}
 						/>
 					</div>
@@ -235,35 +219,18 @@
 		</div>
 	{/if}
 
-	<div class="mt-2 flex max-w-full flex-col gap-1 px-0.5 text-xs">
-		<button
-			type="button"
-			class="inline-flex w-fit items-center gap-2 rounded-lg border px-2.5 py-1.5 transition-all duration-150
-				{multiModelDiscussionEnabled
-				? 'border-primary-300/70 bg-primary-50/70 text-primary-700 shadow-xs dark:border-primary-700/60 dark:bg-primary-900/15 dark:text-primary-200'
-				: 'border-gray-200/70 bg-white/50 text-gray-600 hover:bg-gray-50 dark:border-gray-700/60 dark:bg-gray-900/25 dark:text-gray-400 dark:hover:bg-gray-800/50'}
-				disabled:cursor-not-allowed disabled:opacity-50"
-			disabled={discussionDisabled}
-			aria-pressed={multiModelDiscussionEnabled}
-			title={discussionIssue || $i18n.t('Multi-model discussion')}
-			on:click={toggleMultiModelDiscussion}
-		>
-			<span
-				class="relative inline-flex h-3.5 w-6 shrink-0 rounded-full transition-colors
-					{multiModelDiscussionEnabled ? 'bg-primary-500' : 'bg-gray-300 dark:bg-gray-600'}"
+	{#if showMultiModelDiscussionToggle}
+		<div class="mt-2.5 flex max-w-full items-center">
+			<Switch
+				bind:state={multiModelDiscussionEnabled}
+				disabled={discussionDisabled}
+				variant="success"
+				size="md"
+				tooltip={discussionIssue || ''}
+				ariaLabel={$i18n.t('Multi-model discussion')}
 			>
-				<span
-					class="absolute top-0.5 size-2.5 rounded-full bg-white shadow transition-transform
-						{multiModelDiscussionEnabled ? 'translate-x-3' : 'translate-x-0.5'}"
-				/>
-			</span>
-			<span class="font-medium">{$i18n.t('Multi-model discussion')}</span>
-		</button>
-
-		{#if showDiscussionIssue}
-			<div class="text-[11px] leading-4 text-amber-600 dark:text-amber-400">
-				{discussionIssue}
-			</div>
-		{/if}
-	</div>
+				{$i18n.t('Multi-model discussion')}
+			</Switch>
+		</div>
+	{/if}
 </div>

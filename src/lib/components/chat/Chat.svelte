@@ -186,6 +186,53 @@
 	const pendingGeminiImages = new Map<string, Map<string, PendingGeminiImage>>();
 	const OPENWEBUI_FILE_URL_SCHEME = 'openwebui-file://';
 	const buildImageDataUrl = (mimeType: string, data: string) => `data:${mimeType};base64,${data}`;
+	const extractOpenWebUIFileIdFromUrl = (url: string): string | null => {
+		const match = url.match(/\/(?:api\/v1\/)?files\/([^/?#]+)(?:\/content)?(?:[?#].*)?$/);
+		return match?.[1]?.trim() || null;
+	};
+	const getImageGenerationSlotIndex = (file: any): number | null => {
+		const slotIndex = Number(file?.slot_index);
+		return Number.isFinite(slotIndex) && slotIndex >= 0 ? slotIndex : null;
+	};
+	const isImageGenerationMessageFile = (file: any) =>
+		file?.source === 'image_generation' ||
+		file?.type === 'image_generation_error' ||
+		(file?.type === 'image' && file?.status === 'success' && getImageGenerationSlotIndex(file) !== null);
+	const getMessageFileMergeKeys = (file: any) => {
+		const keys: string[] = [];
+		const id = typeof file?.id === 'string' ? file.id.trim() : '';
+		const url = typeof file?.url === 'string' ? file.url.trim() : '';
+		const contentUrl = typeof file?.content_url === 'string' ? file.content_url.trim() : '';
+		const slotIndex = getImageGenerationSlotIndex(file);
+
+		const fileId =
+			id ||
+			(url ? extractOpenWebUIFileIdFromUrl(url) : null) ||
+			(contentUrl ? extractOpenWebUIFileIdFromUrl(contentUrl) : null);
+
+		if (fileId) keys.push(`file:${fileId}`);
+		if (isImageGenerationMessageFile(file) && slotIndex !== null) {
+			keys.push(`image_generation_slot:${slotIndex}`);
+		}
+		if (url) keys.push(`url:${url}`);
+		if (contentUrl) keys.push(`content_url:${contentUrl}`);
+
+		return keys.length > 0 ? keys : [JSON.stringify(file)];
+	};
+	const mergeMessageFile = (existing: any, incoming: any) => {
+		const merged = { ...existing, ...incoming };
+
+		for (const field of ['id', 'url', 'content_url', 'source', 'status', 'slot_index'] as const) {
+			if (
+				(merged[field] === undefined || merged[field] === null || merged[field] === '') &&
+				(existing[field] !== undefined && existing[field] !== null && existing[field] !== '')
+			) {
+				merged[field] = existing[field];
+			}
+		}
+
+		return merged;
+	};
 	const mergeMessageFiles = (existing: any[] = [], incoming: any[] = []) => {
 		const merged = [];
 		const seen = new Map<string, number>();
@@ -193,15 +240,18 @@
 		for (const file of [...existing, ...incoming]) {
 			if (!file || typeof file !== 'object') continue;
 			const normalized = JSON.parse(JSON.stringify(file));
-			const id = typeof normalized.id === 'string' ? normalized.id.trim() : '';
-			const url = typeof normalized.url === 'string' ? normalized.url.trim() : '';
-			const key = id ? `id:${id}` : url ? `url:${url}` : JSON.stringify(normalized);
-			const existingIndex = seen.get(key);
+			const keys = getMessageFileMergeKeys(normalized);
+			const existingIndex = keys.map((key) => seen.get(key)).find((index) => index !== undefined);
 			if (existingIndex !== undefined) {
-				merged[existingIndex] = { ...merged[existingIndex], ...normalized };
+				merged[existingIndex] = mergeMessageFile(merged[existingIndex], normalized);
+				for (const key of getMessageFileMergeKeys(merged[existingIndex])) {
+					seen.set(key, existingIndex);
+				}
 				continue;
 			}
-			seen.set(key, merged.length);
+			for (const key of keys) {
+				seen.set(key, merged.length);
+			}
 			merged.push(normalized);
 		}
 
@@ -217,8 +267,7 @@
 		}
 
 		const url = typeof file?.url === 'string' ? file.url : '';
-		const match = url.match(/\/api\/v1\/files\/([^/?#]+)(?:\/content)?(?:[?#].*)?$/);
-		return match?.[1] ?? null;
+		return extractOpenWebUIFileIdFromUrl(url);
 	};
 	const sanitizeImageFileRef = (file: any) => {
 		const fileId = extractChatImageFileId(file);
@@ -249,7 +298,12 @@
 				content_type:
 					typeof file?.content_type === 'string' && file.content_type
 						? file.content_type
-						: file?.file?.meta?.content_type ?? undefined
+						: file?.file?.meta?.content_type ?? undefined,
+				content_url:
+					typeof file?.content_url === 'string' && file.content_url ? file.content_url : undefined,
+				source: typeof file?.source === 'string' && file.source ? file.source : undefined,
+				status: typeof file?.status === 'string' && file.status ? file.status : undefined,
+				slot_index: getImageGenerationSlotIndex(file) ?? undefined
 			}).filter(([, value]) => value !== undefined && value !== null && value !== '')
 		);
 	};
@@ -271,6 +325,66 @@
 		}
 
 		return structuredClone(file);
+	};
+	const getImageGenerationReferenceKey = (referenceFiles: any[] = []) =>
+		referenceFiles
+			.map((file) => {
+				const keys = getMessageFileMergeKeys(file);
+				return (
+					keys.find((key) => key.startsWith('file:')) ??
+					keys.find((key) => key.startsWith('image_generation_slot:')) ??
+					keys[0]
+				);
+			})
+			.join('|');
+	const getLatestImageGenerationReferenceFiles = (historyState: any) => {
+		const currentId = historyState?.currentId ?? null;
+		if (!currentId || !historyState?.messages?.[currentId]) {
+			return [];
+		}
+
+		const messages = createMessagesList(historyState, currentId);
+		for (let index = messages.length - 1; index >= 0; index -= 1) {
+			const message = messages[index];
+			if (message?.role !== 'assistant' || !Array.isArray(message?.files)) {
+				continue;
+			}
+
+			const referenceFiles = mergeMessageFiles(
+				[],
+				message.files.filter(
+					(file: any) =>
+						file?.type === 'image' &&
+						isImageGenerationMessageFile(file) &&
+						Boolean(buildModelImageRequestUrl(file))
+				)
+			).sort(
+				(a, b) =>
+					(getImageGenerationSlotIndex(a) ?? Number.MAX_SAFE_INTEGER) -
+					(getImageGenerationSlotIndex(b) ?? Number.MAX_SAFE_INTEGER)
+			);
+
+			if (referenceFiles.length > 0) {
+				return referenceFiles.slice(0, 4);
+			}
+		}
+
+		return [];
+	};
+	const appendReferenceFilesToRequestHistory = (
+		historyState: any,
+		parentId: string,
+		referenceFiles: any[] = []
+	): any => {
+		if (!referenceFiles.length || !historyState?.messages?.[parentId]) {
+			return historyState;
+		}
+
+		const requestHistory: any = structuredClone(historyState);
+		const message = requestHistory.messages[parentId];
+		const normalizedReferenceFiles = referenceFiles.map((file) => normalizeInputFileForMessage(file));
+		message.files = mergeMessageFiles(message.files, normalizedReferenceFiles);
+		return requestHistory;
 	};
 	const uploadInlineImageForPersistence = async (file: any) => {
 		if (!file || typeof file !== 'object' || !isInlineDataImageUrl(file?.url)) {
@@ -908,7 +1022,7 @@
 
 	let taskIds = null;
 	let stoppedResponseMessageIds = new Set<string>();
-	let messageQueue: { id: string; prompt: string; files: any[] }[] = [];
+	let messageQueue: { id: string; prompt: string; files: any[]; referenceFiles?: any[] }[] = [];
 	let branchingMessageId: string | null = null;
 
 	// Temporary instruction for regeneration with modifications (e.g. "more concise")
@@ -919,6 +1033,25 @@
 	let chatFiles = [];
 	let files = [];
 	let params = {};
+	let dismissedImageGenerationReferenceKey = '';
+	let latestImageGenerationReferenceFiles: any[] = [];
+	let latestImageGenerationReferenceKey = '';
+	let activeImageGenerationReferenceFiles: any[] = [];
+	$: latestImageGenerationReferenceFiles = getLatestImageGenerationReferenceFiles(history);
+	$: latestImageGenerationReferenceKey = getImageGenerationReferenceKey(
+		latestImageGenerationReferenceFiles
+	);
+	$: activeImageGenerationReferenceFiles =
+		files.length === 0 &&
+		latestImageGenerationReferenceFiles.length > 0 &&
+		latestImageGenerationReferenceKey !== dismissedImageGenerationReferenceKey
+			? latestImageGenerationReferenceFiles
+			: [];
+	const dismissImageGenerationReference = () => {
+		if (latestImageGenerationReferenceKey) {
+			dismissedImageGenerationReferenceKey = latestImageGenerationReferenceKey;
+		}
+	};
 
 	let reasoningEffort: string | null = null;
 		let maxThinkingTokens: number | null = null;
@@ -1708,6 +1841,22 @@
 		}
 	};
 
+	const restoreChatInputDraft = (input: Record<string, any> | null | undefined) => {
+		if (!input || typeof input !== 'object') {
+			return false;
+		}
+
+		const hasPrompt = Object.prototype.hasOwnProperty.call(input, 'prompt');
+		const hasFiles = Object.prototype.hasOwnProperty.call(input, 'files');
+		if (!hasPrompt && !hasFiles) {
+			return false;
+		}
+
+		prompt = typeof input.prompt === 'string' ? input.prompt : '';
+		files = Array.isArray(input.files) ? input.files : [];
+		return true;
+	};
+
 	const restoreChatSessionState = (id: string | null | undefined = $chatId || chatIdProp) => {
 		try {
 			if (!shouldRestoreChatSessionState(id)) {
@@ -2174,12 +2323,7 @@
 			}
 
 			const input = readChatInputState(targetChatId);
-			if (input) {
-				try {
-					prompt = input.prompt;
-					files = input.files;
-				} catch (e) {}
-			}
+			restoreChatInputDraft(input);
 
 			loading = false;
 			await tick();
@@ -2654,23 +2798,7 @@
 		if (!chatIdProp) {
 			if (getNewChatStateInheritanceEnabled()) {
 				const input = readChatInputState(chatIdProp);
-				if (input) {
-					try {
-						prompt = input.prompt;
-						files = input.files;
-					} catch (e) {
-						prompt = '';
-						files = [];
-						selectedToolIds = [];
-						toolSelectionTouched = false;
-						selectedSkillIds = [];
-						skillSelectionTouched = false;
-						webSearchMode = getPreferredDefaultWebSearchMode();
-						webSearchModeSource = 'default';
-						imageGenerationEnabled = false;
-						imageGenerationOptions = {};
-					}
-				}
+				restoreChatInputDraft(input);
 				restoreChatSessionState(chatIdProp);
 			} else {
 				clearNewChatStateCache();
@@ -3155,6 +3283,8 @@
 		setSelectionThreadsState(createEmptySelectionThreads());
 		expandedSelectionThreadId.set(null);
 		clearResponseAnimationControllers();
+		prompt = '';
+		files = [];
 
 		if (fresh || !inheritNewChatState) {
 			chat = null;
@@ -3163,8 +3293,6 @@
 			processing = '';
 			atSelectedModel = undefined;
 			activeAssistant = null;
-			prompt = '';
-			files = [];
 			selectedToolIds = [];
 			toolSelectionTouched = false;
 			selectedSkillIds = [];
@@ -3935,7 +4063,7 @@
 
 			files = next.files;
 			await tick();
-			await submitPrompt(next.prompt);
+			await submitPrompt(next.prompt, { referenceFiles: next.referenceFiles ?? [] });
 		}
 	};
 
@@ -4548,7 +4676,7 @@
 	// Chat functions
 	//////////////////////////
 
-	const submitPrompt = async (userPrompt, { _raw = false } = {}) => {
+	const submitPrompt = async (userPrompt, { _raw = false, referenceFiles: referenceFilesOverride = null } = {}) => {
 		const messages = createMessagesList(history, history.currentId);
 		const blockingSelection = findBlockingSelectedModelResolution();
 		const _selectedModels = selectedModels.map((modelId, index) => {
@@ -4558,8 +4686,13 @@
 
 		const failedFiles = files.filter((file) => isFailedUploadFile(file));
 		const validFiles = files.filter((file) => !isFailedUploadFile(file));
+		const referenceFiles = Array.isArray(referenceFilesOverride)
+			? referenceFilesOverride
+			: validFiles.length === 0
+				? activeImageGenerationReferenceFiles.map((file) => normalizeInputFileForMessage(file))
+				: [];
 
-		if (userPrompt === '' && validFiles.length === 0) {
+		if (userPrompt === '' && validFiles.length === 0 && referenceFiles.length === 0) {
 			if (failedFiles.length > 0) {
 				toast.warning(
 					$i18n.t(
@@ -4606,7 +4739,7 @@
 		}
 		if (
 			($config?.file?.max_count ?? null) !== null &&
-			validFiles.length + chatFiles.length > $config?.file?.max_count
+			validFiles.length + referenceFiles.length + chatFiles.length > $config?.file?.max_count
 		) {
 			toast.error(
 				$i18n.t(`You can only chat with a maximum of {{maxCount}} file(s) at a time.`, {
@@ -4624,7 +4757,10 @@
 				if (failedFiles.length > 0) {
 					toast.warning(buildIgnoredFailedFilesMessage(failedFiles, $i18n.t.bind($i18n)));
 				}
-				messageQueue = [...messageQueue, { id: uuidv4(), prompt: userPrompt, files: queuedFiles }];
+				messageQueue = [
+					...messageQueue,
+					{ id: uuidv4(), prompt: userPrompt, files: queuedFiles, referenceFiles }
+				];
 				prompt = '';
 				files = structuredClone(failedFiles);
 				return;
@@ -4689,14 +4825,14 @@
 
 		saveSessionSelectedModels();
 
-		await sendPrompt(history, userPrompt, userMessageId, { newChat: true });
+		await sendPrompt(history, userPrompt, userMessageId, { newChat: true, referenceFiles });
 	};
 
 	const sendPrompt = async (
 		_history,
 		prompt: string,
 		parentId: string,
-		{ modelId = null, modelIdx = null, newChat = false } = {}
+		{ modelId = null, modelIdx = null, newChat = false, referenceFiles = [] } = {}
 	) => {
 		if (autoScroll) {
 			scrollToBottom();
@@ -4819,10 +4955,15 @@
 
 			_history = structuredClone(history);
 			await saveChatHandler(_chatId, _history);
+			const requestHistory: any = appendReferenceFilesToRequestHistory(
+				_history,
+				parentId,
+				referenceFiles
+			);
 
-			const messages = createMessagesList(_history, parentId);
-			const hasImages = messages.some((message) =>
-				message.files?.some((file) => file.type === 'image')
+			const messages: any[] = createMessagesList(requestHistory, parentId);
+			const hasImages = messages.some((message: any) =>
+				message.files?.some((file: any) => file.type === 'image')
 			);
 			if (hasImages) {
 				for (const participantId of discussionParticipantIds) {
@@ -4860,13 +5001,14 @@
 			}
 
 			_history.messages[responseMessageId].userContext = userContext;
+			(requestHistory.messages as Record<string, any>)[responseMessageId].userContext = userContext;
 			history.messages[responseMessageId].userContext = userContext;
 
 			const chatEventEmitter = await getChatEventEmitter(getModelRequestId(finalModel), _chatId);
 
 			resetAutoScrollLock();
 			scrollToBottom();
-			await sendPromptSocket(_history, finalModel, responseMessageId, _chatId, {
+			await sendPromptSocket(requestHistory, finalModel, responseMessageId, _chatId, {
 				discussion: buildDiscussionRequestPayload(discussionParticipantIds)
 			});
 
@@ -4926,6 +5068,11 @@
 		_history = structuredClone(history);
 		// Save chat after all messages have been created
 		await saveChatHandler(_chatId, _history);
+		const requestHistory: any = appendReferenceFilesToRequestHistory(
+			_history,
+			parentId,
+			referenceFiles
+		);
 
 		await Promise.all(
 			selectedModelIds.map(async (modelId, _modelIdx) => {
@@ -4933,10 +5080,10 @@
 				const model = getModelById(modelId);
 
 				if (model) {
-					const messages = createMessagesList(_history, parentId);
+					const messages: any[] = createMessagesList(requestHistory, parentId);
 					// If there are image files, check if model is vision capable
-					const hasImages = messages.some((message) =>
-						message.files?.some((file) => file.type === 'image')
+					const hasImages = messages.some((message: any) =>
+						message.files?.some((file: any) => file.type === 'image')
 					);
 
 					if (hasImages && !(model.info?.meta?.capabilities?.vision ?? true)) {
@@ -4949,7 +5096,7 @@
 
 					let responseMessageId =
 						responseMessageIds[`${modelId}-${modelIdx ? modelIdx : _modelIdx}`];
-					let responseMessage = _history.messages[responseMessageId];
+					let responseMessage = (requestHistory.messages as Record<string, any>)[responseMessageId];
 
 					let userContext = null;
 					if ($settings?.memory ?? false) {
@@ -4982,7 +5129,7 @@
 
 					resetAutoScrollLock();
 					scrollToBottom();
-					await sendPromptSocket(_history, model, responseMessageId, _chatId);
+					await sendPromptSocket(requestHistory, model, responseMessageId, _chatId);
 
 					if (chatEventEmitter) clearInterval(chatEventEmitter);
 				} else {
@@ -6098,6 +6245,8 @@
 								bind:maxThinkingTokens
 								{activeAssistant}
 								onDeactivateAssistant={deactivateAssistant}
+								imageGenerationReferenceFiles={activeImageGenerationReferenceFiles}
+								onCancelImageGenerationReference={dismissImageGenerationReference}
 								toolServers={$toolServers}
 								transparentBackground={$settings?.backgroundImageUrl ?? false}
 								{stopResponse}
@@ -6115,7 +6264,7 @@
 									}
 								}}
 								on:submit={async (e) => {
-									if (e.detail || files.length > 0) {
+									if (e.detail || files.length > 0 || activeImageGenerationReferenceFiles.length > 0) {
 										await tick();
 										submitPrompt(
 											($settings?.richTextInput ?? true)
