@@ -1053,7 +1053,7 @@
 							class=" absolute -top-12 left-0 right-0 flex justify-center z-30 pointer-events-none"
 						>
 							<button
-								class=" bg-white/80 dark:bg-gray-800/80 backdrop-blur-sm border border-gray-200 dark:border-gray-600 p-1.5 rounded-full pointer-events-auto shadow-sm hover:bg-white dark:hover:bg-gray-700 transition-all"
+								class="liquid-glass-scroll-button p-1.5 rounded-full pointer-events-auto transition-all"
 								on:click={() => {
 									autoScroll = true;
 									scrollToBottom();
