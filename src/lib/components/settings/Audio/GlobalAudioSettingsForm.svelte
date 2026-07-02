@@ -216,10 +216,12 @@
 	// eslint-disable-next-line no-undef
 	let voices: SpeechSynthesisVoice[] = [];
 	let models: Awaited<ReturnType<typeof _getModels>>['models'] = [];
+	const MIMO_TOKEN_PLAN_DEFAULT_BASE_URL = 'https://token-plan-cn.xiaomimimo.com/v1';
 	const MIMO_TTS_MODELS = [
 		{ id: 'mimo-v2.5-tts', name: 'MiMo-V2.5-TTS' },
 		{ id: 'mimo-v2-tts', name: 'MiMo-V2-TTS' }
 	];
+	const MIMO_TOKEN_PLAN_TTS_MODELS = [{ id: 'mimo-v2.5-tts', name: 'MiMo-V2.5-TTS' }];
 	const MIMO_TTS_VOICES = [
 		{ id: 'mimo_default', name: 'MiMo Default' },
 		{ id: 'default_zh', name: 'MiMo V2 Chinese Female' },
@@ -237,6 +239,10 @@
 		value: model.id,
 		label: model.name
 	}));
+	const MIMO_TOKEN_PLAN_TTS_MODEL_OPTIONS = MIMO_TOKEN_PLAN_TTS_MODELS.map((model) => ({
+		value: model.id,
+		label: model.name
+	}));
 	const MIMO_TTS_VOICE_OPTIONS = MIMO_TTS_VOICES.map((voice) => ({
 		value: voice.id,
 		label: voice.name,
@@ -247,9 +253,12 @@
 		if (engine === 'openai') {
 			TTS_VOICE = 'alloy';
 			TTS_MODEL = 'tts-1';
-		} else if (engine === 'mimo') {
+		} else if (engine === 'mimo' || engine === 'mimo-token-plan') {
 			TTS_VOICE = 'mimo_default';
 			TTS_MODEL = 'mimo-v2.5-tts';
+			if (engine === 'mimo-token-plan' && !TTS_OPENAI_API_BASE_URL) {
+				TTS_OPENAI_API_BASE_URL = MIMO_TOKEN_PLAN_DEFAULT_BASE_URL;
+			}
 		} else {
 			TTS_VOICE = '';
 			TTS_MODEL = '';
@@ -266,18 +275,33 @@
 		} else if (engine === '') {
 			await getVoices();
 			models = [];
-		} else if (engine === 'mimo') {
+		} else if (engine === 'mimo' || engine === 'mimo-token-plan') {
 			voices = MIMO_TTS_VOICES as any;
-			models = MIMO_TTS_MODELS;
+			models = engine === 'mimo-token-plan' ? MIMO_TOKEN_PLAN_TTS_MODELS : MIMO_TTS_MODELS;
 		} else {
 			voices = [];
 			models = [];
 		}
 	};
 
+	const handleSTTEngineChange = (engine: string) => {
+		if (engine === 'mimo-token-plan') {
+			if (!STT_OPENAI_API_BASE_URL) {
+				STT_OPENAI_API_BASE_URL = MIMO_TOKEN_PLAN_DEFAULT_BASE_URL;
+			}
+			if (!STT_MODEL || STT_MODEL === 'whisper-1') {
+				STT_MODEL = 'mimo-v2.5-asr';
+			}
+		} else if (engine === 'openai' && !STT_MODEL) {
+			STT_MODEL = 'whisper-1';
+		}
+	};
+
 	const getModels = async () => {
 		if (TTS_ENGINE === '') {
 			models = [];
+		} else if (TTS_ENGINE === 'mimo-token-plan') {
+			models = MIMO_TOKEN_PLAN_TTS_MODELS;
 		} else if (TTS_ENGINE === 'mimo') {
 			models = MIMO_TTS_MODELS;
 		} else {
@@ -306,7 +330,7 @@
 					voices.sort((a, b) => a.name.localeCompare(b.name, $i18n.resolvedLanguage));
 				}
 			}, 100);
-		} else if (TTS_ENGINE === 'mimo') {
+		} else if (TTS_ENGINE === 'mimo' || TTS_ENGINE === 'mimo-token-plan') {
 			voices = MIMO_TTS_VOICES as any;
 		} else {
 			const res = await _getVoices(localStorage.token).catch((e) => {
@@ -492,16 +516,18 @@
 					options={[
 						{ value: '', label: $i18n.t('Whisper (Local)') },
 						{ value: 'openai', label: 'OpenAI' },
+						{ value: 'mimo-token-plan', label: 'Xiaomi MiMo Token Plan' },
 						{ value: 'web', label: $i18n.t('Web API') },
 						{ value: 'deepgram', label: 'Deepgram' },
 						{ value: 'azure', label: 'Azure AI Speech' }
 					]}
 					className="w-fit"
+					on:change={(e) => handleSTTEngineChange(e.detail.value)}
 				/>
 			</div>
 		</div>
 
-		{#if STT_ENGINE === 'openai'}
+		{#if STT_ENGINE === 'openai' || STT_ENGINE === 'mimo-token-plan'}
 			<div class="space-y-3">
 				<div class="text-sm font-medium text-gray-500 dark:text-gray-400 pl-1">
 					{$i18n.t('Engine Credentials')}
@@ -519,7 +545,7 @@
 				<div class="glass-item p-4">
 					<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('STT Model')}</div>
 					<input list="model-list" class="w-full py-2 px-3 text-sm dark:text-gray-300 glass-input" bind:value={STT_MODEL} placeholder="Select a model" />
-					<datalist id="model-list"><option value="whisper-1" /></datalist>
+					<datalist id="model-list"><option value="whisper-1" /><option value="mimo-v2.5-asr" /></datalist>
 				</div>
 			</div>
 		{:else if STT_ENGINE === 'deepgram'}
@@ -601,6 +627,7 @@
 						{ value: 'transformers', label: `${$i18n.t('Transformers')} (${$i18n.t('Local')})` },
 						{ value: 'openai', label: $i18n.t('OpenAI') },
 						{ value: 'mimo', label: 'Xiaomi MiMo' },
+						{ value: 'mimo-token-plan', label: 'Xiaomi MiMo Token Plan' },
 						{ value: 'elevenlabs', label: $i18n.t('ElevenLabs') },
 						{ value: 'azure', label: $i18n.t('Azure AI Speech') }
 					]}
@@ -634,7 +661,7 @@
 					<SensitiveInput placeholder={$i18n.t('Enter ElevenLabs API Key')} bind:value={TTS_API_KEY} />
 				</div>
 			</div>
-		{:else if TTS_ENGINE === 'mimo'}
+		{:else if TTS_ENGINE === 'mimo' || TTS_ENGINE === 'mimo-token-plan'}
 			<div class="space-y-3">
 				<div class="text-sm font-medium text-gray-500 dark:text-gray-400 pl-1">{$i18n.t('Engine Credentials')}</div>
 				<div class="glass-item p-4">
@@ -706,7 +733,7 @@
 						<datalist id="tts-model-list">{#each models as model}<option value={model.id} />{/each}</datalist>
 					</div>
 				</div>
-			{:else if TTS_ENGINE === 'mimo'}
+			{:else if TTS_ENGINE === 'mimo' || TTS_ENGINE === 'mimo-token-plan'}
 				<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
 					<div class="glass-item p-4">
 						<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('TTS Voice')}</div>
@@ -723,7 +750,9 @@
 						<HaloSelect
 							bind:value={TTS_MODEL}
 							placeholder="Select a model"
-							options={MIMO_TTS_MODEL_OPTIONS}
+							options={TTS_ENGINE === 'mimo-token-plan'
+								? MIMO_TOKEN_PLAN_TTS_MODEL_OPTIONS
+								: MIMO_TTS_MODEL_OPTIONS}
 							className="w-full"
 							contentAlign="start"
 						/>
@@ -801,16 +830,18 @@
 										options={[
 											{ value: '', label: $i18n.t('Whisper (Local)') },
 											{ value: 'openai', label: 'OpenAI' },
+											{ value: 'mimo-token-plan', label: 'Xiaomi MiMo Token Plan' },
 											{ value: 'web', label: $i18n.t('Web API') },
 											{ value: 'deepgram', label: 'Deepgram' },
 											{ value: 'azure', label: 'Azure AI Speech' }
 										]}
 										className="w-fit"
+										on:change={(e) => handleSTTEngineChange(e.detail.value)}
 									/>
 								</div>
 							</div>
 
-							{#if STT_ENGINE === 'openai'}
+							{#if STT_ENGINE === 'openai' || STT_ENGINE === 'mimo-token-plan'}
 								<div class="mt-1 flex gap-2 mb-1">
 									<input class="flex-1 w-full bg-transparent outline-hidden" placeholder={$i18n.t('API Base URL')} bind:value={STT_OPENAI_API_BASE_URL} required />
 									<SensitiveInput placeholder={$i18n.t('API Key')} bind:value={STT_OPENAI_API_KEY} />
@@ -818,7 +849,7 @@
 								<hr class="border-gray-100 dark:border-gray-850 my-2" />
 								<div class="mb-1.5 text-sm font-medium">{$i18n.t('STT Model')}</div>
 								<input list="model-list" class="w-full rounded-lg py-2 px-4 text-sm bg-gray-50 dark:text-gray-300 dark:bg-gray-850 outline-hidden" bind:value={STT_MODEL} placeholder="Select a model" />
-								<datalist id="model-list"><option value="whisper-1" /></datalist>
+								<datalist id="model-list"><option value="whisper-1" /><option value="mimo-v2.5-asr" /></datalist>
 							{:else if STT_ENGINE === 'deepgram'}
 								<div class="mt-1 flex gap-2 mb-1">
 									<SensitiveInput placeholder={$i18n.t('API Key')} bind:value={STT_DEEPGRAM_API_KEY} />
@@ -898,6 +929,7 @@
 											{ value: 'transformers', label: `${$i18n.t('Transformers')} (${$i18n.t('Local')})` },
 											{ value: 'openai', label: $i18n.t('OpenAI') },
 											{ value: 'mimo', label: 'Xiaomi MiMo' },
+											{ value: 'mimo-token-plan', label: 'Xiaomi MiMo Token Plan' },
 											{ value: 'elevenlabs', label: $i18n.t('ElevenLabs') },
 											{ value: 'azure', label: $i18n.t('Azure AI Speech') }
 										]}
@@ -918,7 +950,7 @@
 								<div class="mt-1 flex gap-2 mb-1">
 									<input class="flex-1 w-full rounded-lg py-2 pl-4 text-sm bg-gray-50 dark:text-gray-300 dark:bg-gray-850 outline-hidden" placeholder={$i18n.t('API Key')} bind:value={TTS_API_KEY} required />
 								</div>
-							{:else if TTS_ENGINE === 'mimo'}
+							{:else if TTS_ENGINE === 'mimo' || TTS_ENGINE === 'mimo-token-plan'}
 								<div class="mt-1 flex gap-2 mb-1">
 									<SensitiveInput placeholder="Xiaomi MiMo API Key" bind:value={TTS_API_KEY} />
 								</div>
@@ -955,7 +987,7 @@
 									<div class="w-full"><div class="mb-1.5 text-sm font-medium">{$i18n.t('TTS Voice')}</div><input list="voice-list" class="w-full rounded-lg py-2 px-4 text-sm bg-gray-50 dark:text-gray-300 dark:bg-gray-850 outline-hidden" bind:value={TTS_VOICE} placeholder="Select a voice" /><datalist id="voice-list">{#each voices as voice}<option value={voice.id}>{voice.name}</option>{/each}</datalist></div>
 									<div class="w-full"><div class="mb-1.5 text-sm font-medium">{$i18n.t('TTS Model')}</div><input list="tts-model-list" class="w-full rounded-lg py-2 px-4 text-sm bg-gray-50 dark:text-gray-300 dark:bg-gray-850 outline-hidden" bind:value={TTS_MODEL} placeholder="Select a model" /><datalist id="tts-model-list">{#each models as model}<option value={model.id} />{/each}</datalist></div>
 								</div>
-							{:else if TTS_ENGINE === 'mimo'}
+							{:else if TTS_ENGINE === 'mimo' || TTS_ENGINE === 'mimo-token-plan'}
 								<div class="flex gap-2">
 									<div class="w-full">
 										<div class="mb-1.5 text-sm font-medium">{$i18n.t('TTS Voice')}</div>
@@ -972,7 +1004,9 @@
 										<HaloSelect
 											bind:value={TTS_MODEL}
 											placeholder="Select a model"
-											options={MIMO_TTS_MODEL_OPTIONS}
+											options={TTS_ENGINE === 'mimo-token-plan'
+												? MIMO_TOKEN_PLAN_TTS_MODEL_OPTIONS
+												: MIMO_TTS_MODEL_OPTIONS}
 											className="w-full"
 											contentAlign="start"
 										/>
@@ -1068,17 +1102,19 @@
 										options={[
 											{ value: '', label: $i18n.t('Whisper (Local)') },
 											{ value: 'openai', label: 'OpenAI' },
+											{ value: 'mimo-token-plan', label: 'Xiaomi MiMo Token Plan' },
 											{ value: 'web', label: $i18n.t('Web API') },
 											{ value: 'deepgram', label: 'Deepgram' },
 											{ value: 'azure', label: 'Azure AI Speech' }
 										]}
 										className="w-fit"
+										on:change={(e) => handleSTTEngineChange(e.detail.value)}
 									/>
 								</div>
 							</div>
 
 							<!-- Engine Credentials -->
-							{#if STT_ENGINE === 'openai'}
+							{#if STT_ENGINE === 'openai' || STT_ENGINE === 'mimo-token-plan'}
 								<div class="space-y-3">
 									<div class="text-sm font-medium text-gray-500 dark:text-gray-400 pl-1">
 										{$i18n.t('Engine Credentials')}
@@ -1112,6 +1148,7 @@
 										/>
 										<datalist id="model-list">
 											<option value="whisper-1" />
+											<option value="mimo-v2.5-asr" />
 										</datalist>
 									</div>
 								</div>
@@ -1276,6 +1313,7 @@
 											{ value: 'transformers', label: `${$i18n.t('Transformers')} (${$i18n.t('Local')})` },
 											{ value: 'openai', label: $i18n.t('OpenAI') },
 											{ value: 'mimo', label: 'Xiaomi MiMo' },
+											{ value: 'mimo-token-plan', label: 'Xiaomi MiMo Token Plan' },
 											{ value: 'elevenlabs', label: $i18n.t('ElevenLabs') },
 											{ value: 'azure', label: $i18n.t('Azure AI Speech') }
 										]}
@@ -1325,7 +1363,7 @@
 										/>
 									</div>
 								</div>
-							{:else if TTS_ENGINE === 'mimo'}
+							{:else if TTS_ENGINE === 'mimo' || TTS_ENGINE === 'mimo-token-plan'}
 								<div class="space-y-3">
 									<div class="text-sm font-medium text-gray-500 dark:text-gray-400 pl-1">
 										{$i18n.t('Engine Credentials')}
@@ -1471,7 +1509,7 @@
 											</datalist>
 										</div>
 									</div>
-								{:else if TTS_ENGINE === 'mimo'}
+								{:else if TTS_ENGINE === 'mimo' || TTS_ENGINE === 'mimo-token-plan'}
 									<div class="grid grid-cols-1 md:grid-cols-2 gap-3">
 										<div class="glass-item p-4">
 											<div class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1.5">{$i18n.t('TTS Voice')}</div>
@@ -1488,7 +1526,9 @@
 											<HaloSelect
 												bind:value={TTS_MODEL}
 												placeholder="Select a model"
-												options={MIMO_TTS_MODEL_OPTIONS}
+												options={TTS_ENGINE === 'mimo-token-plan'
+													? MIMO_TOKEN_PLAN_TTS_MODEL_OPTIONS
+													: MIMO_TTS_MODEL_OPTIONS}
 												className="w-full"
 												contentAlign="start"
 											/>

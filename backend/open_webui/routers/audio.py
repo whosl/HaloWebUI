@@ -70,13 +70,21 @@ SPEECH_CACHE_DIR = CACHE_DIR / "audio" / "speech"
 SPEECH_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 
 MIMO_TTS_API_URL = "https://api.xiaomimimo.com/v1/chat/completions"
+MIMO_TOKEN_PLAN_DEFAULT_BASE_URL = "https://token-plan-cn.xiaomimimo.com/v1"
 MIMO_TTS_DEFAULT_MODEL = "mimo-v2.5-tts"
+MIMO_ASR_DEFAULT_MODEL = "mimo-v2.5-asr"
 MIMO_TTS_DEFAULT_VOICE = "mimo_default"
 MIMO_TTS_MODELS = [
     {"id": "mimo-v2.5-tts", "name": "MiMo-V2.5-TTS"},
     {"id": "mimo-v2-tts", "name": "MiMo-V2-TTS"},
 ]
 MIMO_TTS_MODEL_IDS = {model["id"] for model in MIMO_TTS_MODELS}
+MIMO_TOKEN_PLAN_TTS_MODELS = [
+    {"id": "mimo-v2.5-tts", "name": "MiMo-V2.5-TTS"},
+]
+MIMO_TOKEN_PLAN_TTS_MODEL_IDS = {
+    model["id"] for model in MIMO_TOKEN_PLAN_TTS_MODELS
+}
 MIMO_TTS_VOICES = {
     "mimo_default": "MiMo Default",
     "default_zh": "MiMo V2 Chinese Female",
@@ -182,6 +190,10 @@ def _resolve_mimo_tts_model(model: str | None) -> str:
     return model if model in MIMO_TTS_MODEL_IDS else MIMO_TTS_DEFAULT_MODEL
 
 
+def _resolve_mimo_token_plan_tts_model(model: str | None) -> str:
+    return model if model in MIMO_TOKEN_PLAN_TTS_MODEL_IDS else MIMO_TTS_DEFAULT_MODEL
+
+
 def _resolve_mimo_tts_voice(*voices: str | None) -> str:
     for voice in voices:
         if voice in MIMO_TTS_VOICES:
@@ -189,12 +201,27 @@ def _resolve_mimo_tts_voice(*voices: str | None) -> str:
     return MIMO_TTS_DEFAULT_VOICE
 
 
-def _build_mimo_tts_payload(payload: dict, model: str, voice: str) -> dict:
+def _normalize_mimo_token_plan_base_url(base_url: str | None) -> str:
+    base_url = str(base_url or "").strip().rstrip("/")
+    return base_url or MIMO_TOKEN_PLAN_DEFAULT_BASE_URL
+
+
+def _mimo_chat_completions_url(base_url: str | None) -> str:
+    return f"{_normalize_mimo_token_plan_base_url(base_url)}/chat/completions"
+
+
+def _build_mimo_tts_payload(
+    payload: dict, model: str, voice: str, token_plan: bool = False
+) -> dict:
     text = str(payload.get("input") or "").strip()
     if not text:
         raise HTTPException(status_code=400, detail="No text provided for speech synthesis")
 
-    selected_model = _resolve_mimo_tts_model(model)
+    selected_model = (
+        _resolve_mimo_token_plan_tts_model(model)
+        if token_plan
+        else _resolve_mimo_tts_model(model)
+    )
     selected_voice = _resolve_mimo_tts_voice(payload.get("voice"), voice)
 
     return {
@@ -223,6 +250,51 @@ def _extract_mimo_tts_audio_bytes(data: dict) -> bytes:
         return base64.b64decode(audio_data)
     except Exception as exc:
         raise ValueError("MiMo TTS response included invalid audio data") from exc
+
+
+def _build_mimo_asr_payload(file_path: str, model: str | None, language: str = "") -> dict:
+    mime, _ = mimetypes.guess_type(file_path)
+    if not mime:
+        mime = "audio/wav"
+    elif mime in ("audio/x-wav", "audio/wave"):
+        mime = "audio/wav"
+
+    with open(file_path, "rb") as audio_file:
+        audio_data = base64.b64encode(audio_file.read()).decode("ascii")
+
+    payload = {
+        "model": str(model or "").strip() or MIMO_ASR_DEFAULT_MODEL,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": f"data:{mime};base64,{audio_data}",
+                        },
+                    }
+                ],
+            }
+        ],
+    }
+
+    payload["asr_options"] = {"language": language or "auto"}
+
+    return payload
+
+
+def _extract_mimo_asr_text(data: dict) -> str:
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not isinstance(choices, list) or not choices:
+        raise ValueError("MiMo ASR response did not include choices")
+
+    message = choices[0].get("message") if isinstance(choices[0], dict) else None
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, str):
+        raise ValueError("MiMo ASR response did not include transcript content")
+
+    return content.strip()
 
 
 ##########################################
@@ -316,9 +388,14 @@ async def update_audio_config(
     request.app.state.config.AUDIO_STT_AZURE_LOCALES = form_data.stt.AZURE_LOCALES
 
     if request.app.state.config.STT_ENGINE == "":
-        request.app.state.faster_whisper_model = set_faster_whisper_model(
-            form_data.stt.WHISPER_MODEL, WHISPER_MODEL_AUTO_UPDATE
-        )
+        try:
+            request.app.state.faster_whisper_model = set_faster_whisper_model(
+                form_data.stt.WHISPER_MODEL, WHISPER_MODEL_AUTO_UPDATE
+            )
+        except ModuleNotFoundError as e:
+            if e.name != "faster_whisper":
+                raise
+            log.warning("faster_whisper is not installed; skipping local STT model reload")
 
     return {
         "tts": {
@@ -371,15 +448,25 @@ async def speech(request: Request, user=Depends(get_verified_user)):
         log.exception(e)
         raise HTTPException(status_code=400, detail="Invalid JSON payload")
 
-    if request.app.state.config.TTS_ENGINE == "mimo":
+    if request.app.state.config.TTS_ENGINE in ("mimo", "mimo-token-plan"):
         cache_key_parts = [
             body,
             str(request.app.state.config.TTS_ENGINE).encode("utf-8"),
-            _resolve_mimo_tts_model(request.app.state.config.TTS_MODEL).encode("utf-8"),
+            (
+                _resolve_mimo_token_plan_tts_model(request.app.state.config.TTS_MODEL)
+                if request.app.state.config.TTS_ENGINE == "mimo-token-plan"
+                else _resolve_mimo_tts_model(request.app.state.config.TTS_MODEL)
+            ).encode("utf-8"),
             _resolve_mimo_tts_voice(
                 payload.get("voice"), request.app.state.config.TTS_VOICE
             ).encode("utf-8"),
         ]
+        if request.app.state.config.TTS_ENGINE == "mimo-token-plan":
+            cache_key_parts.append(
+                _normalize_mimo_token_plan_base_url(
+                    request.app.state.config.TTS_OPENAI_API_BASE_URL
+                ).encode("utf-8")
+            )
     else:
         cache_key_parts = [
             body,
@@ -391,13 +478,17 @@ async def speech(request: Request, user=Depends(get_verified_user)):
         b"".join(cache_key_parts)
     ).hexdigest()
 
-    file_extension = "wav" if request.app.state.config.TTS_ENGINE == "mimo" else "mp3"
+    file_extension = (
+        "wav"
+        if request.app.state.config.TTS_ENGINE in ("mimo", "mimo-token-plan")
+        else "mp3"
+    )
     file_path = SPEECH_CACHE_DIR.joinpath(f"{name}.{file_extension}")
     file_body_path = SPEECH_CACHE_DIR.joinpath(f"{name}.json")
 
     # Check if the file already exists in the cache
     if file_path.is_file():
-        if request.app.state.config.TTS_ENGINE == "mimo":
+        if request.app.state.config.TTS_ENGINE in ("mimo", "mimo-token-plan"):
             return FileResponse(file_path, media_type="audio/wav")
         return FileResponse(file_path)
 
@@ -456,7 +547,7 @@ async def speech(request: Request, user=Depends(get_verified_user)):
                 detail=await _read_audio_aiohttp_error_detail(r, e),
             )
 
-    elif request.app.state.config.TTS_ENGINE == "mimo":
+    elif request.app.state.config.TTS_ENGINE in ("mimo", "mimo-token-plan"):
         r = None
         try:
             if not request.app.state.config.TTS_API_KEY:
@@ -469,13 +560,21 @@ async def speech(request: Request, user=Depends(get_verified_user)):
                 payload,
                 request.app.state.config.TTS_MODEL,
                 request.app.state.config.TTS_VOICE,
+                token_plan=request.app.state.config.TTS_ENGINE == "mimo-token-plan",
+            )
+            mimo_url = (
+                _mimo_chat_completions_url(
+                    request.app.state.config.TTS_OPENAI_API_BASE_URL
+                )
+                if request.app.state.config.TTS_ENGINE == "mimo-token-plan"
+                else MIMO_TTS_API_URL
             )
             timeout = aiohttp.ClientTimeout(total=AIOHTTP_CLIENT_TIMEOUT)
             async with aiohttp.ClientSession(
                 timeout=timeout, trust_env=True
             ) as session:
                 async with session.post(
-                    url=MIMO_TTS_API_URL,
+                    url=mimo_url,
                     json=mimo_payload,
                     headers={
                         "Content-Type": "application/json",
@@ -831,6 +930,44 @@ def transcribe(request: Request, file_path, language: str = ""):
                     detail = f"External: {e}"
             raise Exception(_read_audio_requests_error_detail(r, e))
 
+    elif request.app.state.config.STT_ENGINE == "mimo-token-plan":
+        r = None
+        try:
+            if not request.app.state.config.STT_OPENAI_API_KEY:
+                raise HTTPException(
+                    status_code=400,
+                    detail="MiMo Token Plan ASR API key is not configured",
+                )
+
+            payload = _build_mimo_asr_payload(
+                file_path, request.app.state.config.STT_MODEL, language
+            )
+            r = requests.post(
+                url=_mimo_chat_completions_url(
+                    request.app.state.config.STT_OPENAI_API_BASE_URL
+                ),
+                headers={
+                    "Content-Type": "application/json",
+                    "api-key": request.app.state.config.STT_OPENAI_API_KEY,
+                },
+                json=payload,
+                verify=REQUESTS_VERIFY,
+            )
+            r.raise_for_status()
+            response_data = r.json()
+            data = {"text": _extract_mimo_asr_text(response_data)}
+
+            transcript_file = f"{file_dir}/{id}.json"
+            with open(transcript_file, "w") as f:
+                json.dump(data, f)
+
+            return data
+        except HTTPException:
+            raise
+        except Exception as e:
+            log.exception(e)
+            raise Exception(_read_audio_requests_error_detail(r, e))
+
     elif request.app.state.config.STT_ENGINE == "azure":
         # Check file exists and size
         if not os.path.exists(file_path):
@@ -1066,6 +1203,8 @@ def get_available_models(request: Request) -> list[dict]:
             ]
         except requests.RequestException as e:
             log.error(f"Error fetching voices: {str(e)}")
+    elif request.app.state.config.TTS_ENGINE == "mimo-token-plan":
+        available_models = MIMO_TOKEN_PLAN_TTS_MODELS
     elif request.app.state.config.TTS_ENGINE == "mimo":
         available_models = MIMO_TTS_MODELS
     return available_models
@@ -1142,7 +1281,7 @@ def get_available_voices(request) -> dict:
                 )
         except requests.RequestException as e:
             log.error(f"Error fetching voices: {str(e)}")
-    elif request.app.state.config.TTS_ENGINE == "mimo":
+    elif request.app.state.config.TTS_ENGINE in ("mimo", "mimo-token-plan"):
         available_voices = MIMO_TTS_VOICES
 
     return available_voices
