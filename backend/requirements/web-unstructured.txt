@@ -1,0 +1,7 @@
+# Minimal dependency set needed by the default safe web/document loader.
+# Keep transitive pins explicit so installing unstructured does not upgrade
+# core runtime packages such as pydantic and pypdf.
+unstructured==0.16.17
+unstructured-client==0.32.3
+nltk==3.9.1
+pypandoc==1.15

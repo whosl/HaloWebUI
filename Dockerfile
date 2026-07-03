@@ -159,6 +159,8 @@ RUN set -eux; \
     if [ "$HALO_RUNTIME_PROFILE" = "main" ]; then \
         uv pip install --system -r requirements/storage-s3.txt --no-cache-dir; \
     fi; \
+    uv pip install --system -r requirements/web-unstructured.txt --no-cache-dir; \
+    python -c "import nltk; [nltk.download(pkg, download_dir='/root/nltk_data', quiet=True, raise_on_error=True) for pkg in ('punkt_tab', 'averaged_perceptron_tagger_eng')]; from unstructured.partition.html import partition_html; assert partition_html(text='<html><body><p>ok</p></body></html>')"; \
     python -m playwright install --with-deps chromium; \
     if [ "$PRELOAD_LOCAL_MODELS" = "true" ]; then \
         if [ "$INSTALL_PROFILE" = "local-rag" ] || [ "$INSTALL_PROFILE" = "full" ]; then \
