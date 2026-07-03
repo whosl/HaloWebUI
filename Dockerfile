@@ -159,6 +159,7 @@ RUN set -eux; \
     if [ "$HALO_RUNTIME_PROFILE" = "main" ]; then \
         uv pip install --system -r requirements/storage-s3.txt --no-cache-dir; \
     fi; \
+    python -m playwright install --with-deps chromium; \
     if [ "$PRELOAD_LOCAL_MODELS" = "true" ]; then \
         if [ "$INSTALL_PROFILE" = "local-rag" ] || [ "$INSTALL_PROFILE" = "full" ]; then \
             python -c "import os; from sentence_transformers import SentenceTransformer; SentenceTransformer(os.environ['RAG_EMBEDDING_MODEL'], device='cpu')"; \
