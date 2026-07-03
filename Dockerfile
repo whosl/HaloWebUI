@@ -35,6 +35,7 @@ WORKDIR /app
 
 COPY package.json package-lock.json .npmrc ./
 ENV ONNXRUNTIME_NODE_INSTALL_CUDA=skip
+ENV NODE_OPTIONS=--max-old-space-size=3072
 RUN npm ci
 
 COPY src ./src
