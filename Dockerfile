@@ -104,6 +104,10 @@ WORKDIR /app/backend
 COPY ./backend/requirements ./requirements
 
 RUN set -eux; \
+    sed -i \
+        -e 's|http://deb.debian.org/debian-security|https://mirrors.tuna.tsinghua.edu.cn/debian-security|g' \
+        -e 's|http://deb.debian.org/debian|https://mirrors.tuna.tsinghua.edu.cn/debian|g' \
+        /etc/apt/sources.list /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
     extra_apt_packages=""; \
     build_apt_packages="gcc python3-dev"; \
     pg_client_packages=""; \
