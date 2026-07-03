@@ -34,6 +34,7 @@ ARG VITE_SOURCEMAP=false
 WORKDIR /app
 
 COPY package.json package-lock.json .npmrc ./
+ENV ONNXRUNTIME_NODE_INSTALL_CUDA=skip
 RUN npm ci
 
 COPY src ./src
